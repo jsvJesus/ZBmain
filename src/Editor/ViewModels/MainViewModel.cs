@@ -7,15 +7,13 @@ namespace Editor.ViewModels;
 public sealed class MainViewModel : ViewModelBase
 {
     private readonly LevelArchiveImporter _importer = new();
-    private readonly LevelPreviewReader _reader = new();
+    private readonly RenderLevelReader _reader = new();
 
     private string? _selectedSource;
     private string? _selectedPackage;
-
     private string _sceneTitle = "Пустая сцена";
-    private string _statusText = "Готово. Сцена не загружена.";
-
-    private LevelPreview? _preview;
+    private string _statusText = "Сцена не загружена.";
+    private RenderLevel? _scene;
     private bool _isBusy;
 
     public MainViewModel()
@@ -27,7 +25,15 @@ public sealed class MainViewModel : ViewModelBase
 
     public ObservableCollection<string> SavedLevels { get; } = new();
 
-    public LevelPreview? Preview => _preview;
+    public RenderLevel? Scene
+    {
+        get => _scene;
+        private set
+        {
+            _scene = value;
+            OnPropertyChanged();
+        }
+    }
 
     public string? SelectedSource
     {
@@ -71,6 +77,8 @@ public sealed class MainViewModel : ViewModelBase
 
     public void Refresh()
     {
+        LevelPaths.EnsureDirectories();
+
         string? oldSource = SelectedSource;
         string? oldPackage = SelectedPackage;
 
@@ -98,10 +106,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public void NewScene()
     {
-        _preview = null;
-
-        OnPropertyChanged(nameof(Preview));
-
+        Scene = null;
         SceneTitle = "Пустая сцена";
         StatusText = "Создана пустая сцена.";
     }
@@ -110,13 +115,12 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (_isBusy)
         {
-            StatusText = "Импорт уже выполняется.";
             return;
         }
 
         if (string.IsNullOrWhiteSpace(SelectedSource))
         {
-            StatusText = "Выберите исходный уровень слева.";
+            StatusText = "Выберите исходный уровень.";
             return;
         }
 
@@ -125,7 +129,7 @@ public sealed class MainViewModel : ViewModelBase
         string name = SelectedSource;
 
         StatusText =
-            $"Импорт {name}: конвертация геометрии...";
+            $"Конвертация {name}: обработка файлов...";
 
         try
         {
@@ -139,8 +143,6 @@ public sealed class MainViewModel : ViewModelBase
 
             StatusText =
                 $"Импортировано: {result.FileCount} файлов. " +
-                $"Коллизия: {result.Vertices:N0} вершин, " +
-                $"{result.Triangles:N0} граней. " +
                 $"Визуальных мешей: {result.VisualMeshes:N0}, " +
                 $"треугольников: {result.VisualTriangles:N0}.";
         }
@@ -165,49 +167,38 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (string.IsNullOrWhiteSpace(SelectedPackage))
         {
-            StatusText =
-                "Выберите сохранённый уровень справа.";
+            StatusText = "Выберите сохранённый уровень.";
             return;
         }
 
         string name = SelectedPackage;
 
-        StatusText = $"Загрузка {name}...";
+        StatusText = $"Открытие {name}...";
 
         try
         {
-            LevelPreview preview = await Task.Run(
+            RenderLevel level = await Task.Run(
                 () => _reader.Read(
                     LevelPaths.PackagePath(name)));
 
-            _preview = preview;
+            Scene = level;
+            SceneTitle = level.Name;
 
-            OnPropertyChanged(nameof(Preview));
+            long triangles = level.Surfaces.Sum(
+                surface => (long)surface.IndexCount / 3);
 
-            SceneTitle = preview.Name;
-
-            if (preview.HasVisualGeometry)
-            {
-                StatusText =
-                    $"Открыто: {name}. " +
-                    $"Визуальных мешей: {preview.VisualMeshes:N0}, " +
-                    $"треугольников: {preview.VisualTriangles:N0}, " +
-                    $"материалов: {preview.Materials:N0}.";
-            }
-            else
-            {
-                StatusText =
-                    $"Открыто: {name}. " +
-                    "Визуальная геометрия отсутствует. " +
-                    "Отображаются коллизии.";
-            }
+            StatusText =
+                $"Открыто: {level.Name}. " +
+                $"Мешей: {level.Surfaces.Length:N0}, " +
+                $"треугольников: {triangles:N0}, " +
+                $"материалов: {level.Materials.Length:N0}.";
         }
         catch (Exception exception) when (
             exception is IOException or
                 UnauthorizedAccessException or
                 InvalidDataException or
                 ArgumentException or
-                System.Text.Json.JsonException or
+                NotSupportedException or
                 OverflowException)
         {
             StatusText =

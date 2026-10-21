@@ -5,12 +5,15 @@
         <RootNamespace>Editor</RootNamespace>
         <RuntimeIdentifier>win-x64</RuntimeIdentifier>
         <SelfContained>false</SelfContained>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="Avalonia.Desktop" />
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+        <PackageReference Include="BCnEncoder.Net.ImageSharp" />
         <ProjectReference Include="..\Core\Core.csproj" />
     </ItemGroup>
 </Project>

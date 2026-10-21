@@ -39,7 +39,7 @@ public sealed partial class MainWindow : Window
         if (DataContext is MainViewModel viewModel)
         {
             await viewModel.ImportSelectedAsync();
-            SceneView.Scene = viewModel.Preview;
+            SceneView.Scene = viewModel.Scene;
         }
     }
 
@@ -50,7 +50,7 @@ public sealed partial class MainWindow : Window
         if (DataContext is MainViewModel viewModel)
         {
             await viewModel.OpenSelectedAsync();
-            SceneView.Scene = viewModel.Preview;
+            SceneView.Scene = viewModel.Scene;
         }
     }
 }
