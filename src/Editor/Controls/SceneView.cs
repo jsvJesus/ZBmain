@@ -1,7 +1,7 @@
 
 using System.Numerics;
 using Avalonia;
-using Avalonia.Input;
+using Avalonia.Controls;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Core.Levels;
@@ -13,12 +13,10 @@ namespace Editor.Controls;
 public sealed unsafe class SceneView : OpenGlControlBase
 {
     private const int VertexStride = 5 * sizeof(float);
-
-    private sealed record GpuBuffer(
-        uint VertexHandle,
-        uint IndexHandle);
+    private const int MaxTextureUploadsPerFrame = 2;
 
     private GL? _gl;
+
     private uint _program;
     private uint _vao;
     private uint _gridBuffer;
@@ -28,27 +26,27 @@ public sealed unsafe class SceneView : OpenGlControlBase
     private int _tintLocation;
     private int _textureLocation;
     private int _hasTextureLocation;
+    private int _gridLocation;
 
     private RenderLevel? _scene;
     private MaterialTextureLoader? _textureLoader;
 
-    private readonly List<GpuBuffer> _buffers = new();
+    private readonly List<uint> _vertexBuffers = new();
+    private readonly List<uint> _indexBuffers = new();
+
     private readonly Dictionary<int, uint> _textures = new();
 
     private Vector3 _target;
+
     private float _radius = 100f;
     private float _distance = 250f;
     private float _yaw = 0.7f;
     private float _pitch = 0.5f;
 
-    private Point? _lastPointer;
-    private bool _orbiting;
-    private bool _panning;
     private bool _resourcesDirty = true;
 
     public SceneView()
     {
-        Focusable = true;
         ClipToBounds = true;
     }
 
@@ -59,6 +57,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
         {
             _scene = value;
             _resourcesDirty = true;
+
             ResetCamera();
             RequestNextFrameRendering();
         }
@@ -84,6 +83,70 @@ public sealed unsafe class SceneView : OpenGlControlBase
         }
 
         _distance = _radius * 2.5f;
+
+        RequestNextFrameRendering();
+    }
+
+    public void Orbit(float deltaX, float deltaY)
+    {
+        _yaw += deltaX * 0.007f;
+
+        _pitch = Math.Clamp(
+            _pitch + deltaY * 0.007f,
+            -1.45f,
+            1.45f);
+
+        RequestNextFrameRendering();
+    }
+
+    public void Pan(float deltaX, float deltaY)
+    {
+        Vector3 direction = GetCameraDirection();
+
+        Vector3 right = Vector3.Normalize(
+            Vector3.Cross(Vector3.UnitY, direction));
+
+        Vector3 up = Vector3.Normalize(
+            Vector3.Cross(direction, right));
+
+        float scale = _distance /
+                      MathF.Max(1f, (float)Bounds.Height);
+
+        _target -= right * (deltaX * scale);
+        _target += up * (deltaY * scale);
+
+        RequestNextFrameRendering();
+    }
+
+    public void Zoom(float steps)
+    {
+        _distance = Math.Clamp(
+            _distance * MathF.Pow(0.84f, steps),
+            0.5f,
+            _radius * 50f);
+
+        RequestNextFrameRendering();
+    }
+
+    public void MoveCamera(
+        float forward,
+        float sideways,
+        float vertical)
+    {
+        Vector3 direction = GetCameraDirection();
+
+        Vector3 horizontalForward = Vector3.Normalize(
+            new Vector3(-direction.X, 0f, -direction.Z));
+
+        Vector3 right = Vector3.Normalize(
+            Vector3.Cross(Vector3.UnitY, direction));
+
+        float step = MathF.Max(0.5f, _distance * 0.025f);
+
+        _target += horizontalForward * (forward * step);
+        _target += right * (sideways * step);
+        _target += Vector3.UnitY * (vertical * step);
+
         RequestNextFrameRendering();
     }
 
@@ -94,6 +157,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
         _gl = GL.GetApi(context.GetProcAddress);
 
         string version = _gl.GetStringS(StringName.Version);
+
         bool isEs = version.Contains(
             "OpenGL ES",
             StringComparison.OrdinalIgnoreCase);
@@ -102,7 +166,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
             ? "#version 300 es\nprecision highp float;\n"
             : "#version 330 core\n";
 
-        string vertexSource = shaderHeader + """
+        string vertexShaderSource = shaderHeader + """
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec2 aUv;
 
@@ -117,24 +181,31 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 vec4 world = uModel * vec4(aPosition, 1.0);
 
                 vWorldPosition = world.xyz;
-                vUv = aUv;
+                vUv = vec2(aUv.x, 1.0 - aUv.y);
 
                 gl_Position = uViewProjection * world;
             }
             """;
 
-        string fragmentSource = shaderHeader + """
+        string fragmentShaderSource = shaderHeader + """
             in vec2 vUv;
             in vec3 vWorldPosition;
 
             uniform sampler2D uTexture;
             uniform int uHasTexture;
+            uniform int uGrid;
             uniform vec3 uTint;
 
             out vec4 outputColor;
 
             void main()
             {
+                if (uGrid != 0)
+                {
+                    outputColor = vec4(uTint, 1.0);
+                    return;
+                }
+
                 vec4 baseColor = vec4(uTint, 1.0);
 
                 if (uHasTexture != 0)
@@ -150,12 +221,18 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 vec3 dx = dFdx(vWorldPosition);
                 vec3 dy = dFdy(vWorldPosition);
 
-                vec3 normal = normalize(cross(dx, dy));
-                vec3 lightDirection = normalize(
-                    vec3(0.4, 0.8, 0.5));
+                vec3 normal = cross(dx, dy);
 
-                float diffuse = abs(
-                    dot(normal, lightDirection));
+                float diffuse = 0.5;
+
+                if (dot(normal, normal) > 0.000001)
+                {
+                    normal = normalize(normal);
+
+                    diffuse = abs(dot(
+                        normal,
+                        normalize(vec3(0.4, 0.8, 0.5))));
+                }
 
                 float lighting = 0.45 + 0.55 * diffuse;
 
@@ -167,11 +244,11 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         uint vertexShader = CompileShader(
             ShaderType.VertexShader,
-            vertexSource);
+            vertexShaderSource);
 
         uint fragmentShader = CompileShader(
             ShaderType.FragmentShader,
-            fragmentSource);
+            fragmentShaderSource);
 
         _program = _gl.CreateProgram();
 
@@ -194,24 +271,22 @@ public sealed unsafe class SceneView : OpenGlControlBase
         _gl.DeleteShader(fragmentShader);
 
         _viewProjectionLocation = _gl.GetUniformLocation(
-            _program,
-            "uViewProjection");
+            _program, "uViewProjection");
 
         _modelLocation = _gl.GetUniformLocation(
-            _program,
-            "uModel");
+            _program, "uModel");
 
         _tintLocation = _gl.GetUniformLocation(
-            _program,
-            "uTint");
+            _program, "uTint");
 
         _textureLocation = _gl.GetUniformLocation(
-            _program,
-            "uTexture");
+            _program, "uTexture");
 
         _hasTextureLocation = _gl.GetUniformLocation(
-            _program,
-            "uHasTexture");
+            _program, "uHasTexture");
+
+        _gridLocation = _gl.GetUniformLocation(
+            _program, "uGrid");
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -221,6 +296,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Lequal);
+
         _gl.Disable(EnableCap.CullFace);
 
         _gl.UseProgram(_program);
@@ -240,50 +316,42 @@ public sealed unsafe class SceneView : OpenGlControlBase
             return;
         }
 
-        _gl.BindFramebuffer(
+        GL gl = _gl;
+
+        gl.BindFramebuffer(
             FramebufferTarget.Framebuffer,
             (uint)framebuffer);
 
-        int width = Math.Max(
-            1,
-            (int)Bounds.Width);
+        int width = Math.Max(1, (int)Bounds.Width);
+        int height = Math.Max(1, (int)Bounds.Height);
 
-        int height = Math.Max(
-            1,
-            (int)Bounds.Height);
-
-        _gl.Viewport(
+        gl.Viewport(
             0,
             0,
             (uint)width,
             (uint)height);
 
-        _gl.ClearColor(
-            0.035f,
-            0.055f,
-            0.085f,
-            1f);
+        gl.ClearColor(0.035f, 0.055f, 0.085f, 1f);
 
-        _gl.Clear(
+        gl.Clear(
             (uint)(ClearBufferMask.ColorBufferBit |
                    ClearBufferMask.DepthBufferBit));
 
-        _gl.Enable(EnableCap.DepthTest);
+        gl.Enable(EnableCap.DepthTest);
+        gl.BindVertexArray(_vao);
+        gl.UseProgram(_program);
 
         if (_resourcesDirty)
         {
             UploadScene();
+
             _resourcesDirty = false;
         }
 
-        _gl.UseProgram(_program);
-        _gl.BindVertexArray(_vao);
+        Matrix4x4 viewProjection =
+            CreateViewProjection(width, height);
 
-        Matrix4x4 viewProjection = CreateViewProjection(
-            width,
-            height);
-
-        _gl.UniformMatrix4(
+        gl.UniformMatrix4(
             _viewProjectionLocation,
             1,
             false,
@@ -295,8 +363,11 @@ public sealed unsafe class SceneView : OpenGlControlBase
             return;
         }
 
-        Matrix4x4 previousModel = Matrix4x4.Identity;
+        int remainingUploads = MaxTextureUploadsPerFrame;
+        bool needsAnotherFrame = false;
+
         int currentMaterial = int.MinValue;
+        Matrix4x4 previousModel = Matrix4x4.Identity;
 
         for (int i = 0; i < _scene.Surfaces.Length; i++)
         {
@@ -307,20 +378,18 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 continue;
             }
 
-            GpuBuffer buffer = _buffers[surface.VertexBuffer];
-
-            _gl.BindBuffer(
+            gl.BindBuffer(
                 BufferTargetARB.ArrayBuffer,
-                buffer.VertexHandle);
+                _vertexBuffers[surface.VertexBuffer]);
 
-            _gl.BindBuffer(
+            gl.BindBuffer(
                 BufferTargetARB.ElementArrayBuffer,
-                _buffers[surface.IndexBuffer].IndexHandle);
+                _indexBuffers[surface.IndexBuffer]);
 
             nint vertexOffset =
                 (nint)surface.VertexOffset * VertexStride;
 
-            _gl.VertexAttribPointer(
+            gl.VertexAttribPointer(
                 0,
                 3,
                 VertexAttribPointerType.Float,
@@ -328,7 +397,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 VertexStride,
                 (void*)vertexOffset);
 
-            _gl.VertexAttribPointer(
+            gl.VertexAttribPointer(
                 1,
                 2,
                 VertexAttribPointerType.Float,
@@ -340,7 +409,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
             {
                 Matrix4x4 model = surface.Transform;
 
-                _gl.UniformMatrix4(
+                gl.UniformMatrix4(
                     _modelLocation,
                     1,
                     false,
@@ -351,18 +420,27 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
             if (surface.Material != currentMaterial)
             {
-                BindMaterial(surface.Material);
+                BindMaterial(
+                    surface.Material,
+                    ref remainingUploads,
+                    ref needsAnotherFrame);
+
                 currentMaterial = surface.Material;
             }
 
-            _gl.DrawElements(
+            gl.DrawElements(
                 PrimitiveType.Triangles,
                 (uint)surface.IndexCount,
                 DrawElementsType.UnsignedShort,
                 (void*)(surface.IndexOffset * sizeof(ushort)));
         }
 
-        _gl.BindVertexArray(0);
+        gl.BindVertexArray(0);
+
+        if (needsAnotherFrame)
+        {
+            RequestNextFrameRendering();
+        }
     }
 
     private uint CompileShader(
@@ -384,6 +462,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
         if (success == 0)
         {
             string log = gl.GetShaderInfoLog(shader);
+
             gl.DeleteShader(shader);
 
             throw new InvalidOperationException(
@@ -395,12 +474,13 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
     private void UploadScene()
     {
-        if (_gl is null)
+        GL? gl = _gl;
+
+        if (gl is null)
         {
             return;
         }
 
-        _gl.BindVertexArray(_vao);
         DeleteSceneResources();
 
         if (_scene is null)
@@ -408,58 +488,56 @@ public sealed unsafe class SceneView : OpenGlControlBase
             return;
         }
 
+        gl.BindVertexArray(_vao);
+
         _textureLoader = new MaterialTextureLoader();
+        _textureLoader.WriteMaterialReport(_scene.Materials);
 
-        int count = Math.Max(
-            _scene.Vertices.Length,
-            _scene.Indices.Length);
-
-        for (int i = 0; i < count; i++)
+        foreach (RenderVertexBuffer buffer in _scene.Vertices)
         {
-            uint vertexHandle = _gl.GenBuffer();
-            uint indexHandle = _gl.GenBuffer();
+            uint handle = gl.GenBuffer();
 
-            _gl.BindBuffer(
+            gl.BindBuffer(
                 BufferTargetARB.ArrayBuffer,
-                vertexHandle);
+                handle);
 
-            float[] vertices = i < _scene.Vertices.Length
-                ? _scene.Vertices[i].Data
-                : [];
-
-            fixed (float* vertexPointer = vertices)
+            fixed (float* pointer = buffer.Data)
             {
-                _gl.BufferData(
+                gl.BufferData(
                     BufferTargetARB.ArrayBuffer,
-                    (nuint)(vertices.Length * sizeof(float)),
-                    vertexPointer,
+                    (nuint)(buffer.Data.Length * sizeof(float)),
+                    pointer,
                     BufferUsageARB.StaticDraw);
             }
 
-            _gl.BindBuffer(
+            _vertexBuffers.Add(handle);
+        }
+
+        foreach (RenderIndexBuffer buffer in _scene.Indices)
+        {
+            uint handle = gl.GenBuffer();
+
+            gl.BindBuffer(
                 BufferTargetARB.ElementArrayBuffer,
-                indexHandle);
+                handle);
 
-            ushort[] indices = i < _scene.Indices.Length
-                ? _scene.Indices[i].Data
-                : [];
-
-            fixed (ushort* indexPointer = indices)
+            fixed (ushort* pointer = buffer.Data)
             {
-                _gl.BufferData(
+                gl.BufferData(
                     BufferTargetARB.ElementArrayBuffer,
-                    (nuint)(indices.Length * sizeof(ushort)),
-                    indexPointer,
+                    (nuint)(buffer.Data.Length * sizeof(ushort)),
+                    pointer,
                     BufferUsageARB.StaticDraw);
             }
 
-            _buffers.Add(new GpuBuffer(
-                vertexHandle,
-                indexHandle));
+            _indexBuffers.Add(handle);
         }
     }
 
-    private void BindMaterial(int materialId)
+    private void BindMaterial(
+        int materialId,
+        ref int remainingUploads,
+        ref bool needsAnotherFrame)
     {
         GL gl = _gl!;
 
@@ -472,8 +550,19 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         if (!_textures.TryGetValue(materialId, out texture))
         {
-            texture = CreateTexture(name);
-            _textures.Add(materialId, texture);
+            if (remainingUploads > 0)
+            {
+                remainingUploads--;
+
+                texture = CreateTexture(name);
+
+                _textures.Add(materialId, texture);
+            }
+            else
+            {
+                texture = 0;
+                needsAnotherFrame = true;
+            }
         }
 
         gl.ActiveTexture(TextureUnit.Texture0);
@@ -502,60 +591,68 @@ public sealed unsafe class SceneView : OpenGlControlBase
             return 0;
         }
 
-        TexturePixels? image;
+        TexturePixels? pixels;
 
         try
         {
-            image = _textureLoader.Load(material);
+            pixels = _textureLoader.Load(material);
         }
-        catch (Exception exception) when (
-            exception is IOException or
-                NotSupportedException or
-                InvalidDataException or
-                ArgumentException)
+        catch (Exception exception)
+        {
+            _textureLoader.ReportError(
+                material,
+                exception);
+
+            return 0;
+        }
+
+        if (pixels is null)
         {
             return 0;
         }
 
-        if (image is null)
-        {
-            return 0;
-        }
+        GL gl = _gl;
 
-        uint texture = _gl.GenTexture();
+        uint texture = gl.GenTexture();
 
-        _gl.BindTexture(
+        gl.ActiveTexture(TextureUnit.Texture0);
+
+        gl.BindTexture(
             TextureTarget.Texture2D,
             texture);
 
-        _gl.TexParameter(
+        gl.TexParameter(
             TextureTarget.Texture2D,
             TextureParameterName.TextureMinFilter,
             (int)TextureMinFilter.Linear);
 
-        _gl.TexParameter(
+        gl.TexParameter(
             TextureTarget.Texture2D,
             TextureParameterName.TextureMagFilter,
             (int)TextureMagFilter.Linear);
 
-        _gl.TexParameter(
+        gl.TexParameter(
             TextureTarget.Texture2D,
             TextureParameterName.TextureWrapS,
             (int)TextureWrapMode.Repeat);
 
-        _gl.TexParameter(
+        gl.TexParameter(
             TextureTarget.Texture2D,
             TextureParameterName.TextureWrapT,
             (int)TextureWrapMode.Repeat);
 
-        fixed (byte* pointer = image.Rgba)
+        gl.PixelStore(
+            PixelStoreParameter.UnpackAlignment,
+            1);
+
+        fixed (byte* pointer = pixels.Rgba)
         {
-            _gl.TexImage2D(
+            gl.TexImage2D(
                 TextureTarget.Texture2D,
                 0,
                 InternalFormat.Rgba,
-                (uint)image.Width,
-                (uint)image.Height,
+                (uint)pixels.Width,
+                (uint)pixels.Height,
                 0,
                 PixelFormat.Rgba,
                 PixelType.UnsignedByte,
@@ -570,6 +667,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
         int height)
     {
         Vector3 direction = GetCameraDirection();
+
         Vector3 position = _target + direction * _distance;
 
         Matrix4x4 view = Matrix4x4.CreateLookAt(
@@ -599,19 +697,22 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
     private void CreateGrid()
     {
+        GL gl = _gl!;
+
         var vertices = new List<float>();
 
         for (int i = -20; i <= 20; i++)
         {
             AddGridVertex(vertices, i * 5, 0, -100);
             AddGridVertex(vertices, i * 5, 0, 100);
+
             AddGridVertex(vertices, -100, 0, i * 5);
             AddGridVertex(vertices, 100, 0, i * 5);
         }
 
-        _gridBuffer = _gl!.GenBuffer();
+        _gridBuffer = gl.GenBuffer();
 
-        _gl.BindBuffer(
+        gl.BindBuffer(
             BufferTargetARB.ArrayBuffer,
             _gridBuffer);
 
@@ -619,7 +720,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         fixed (float* pointer = data)
         {
-            _gl.BufferData(
+            gl.BufferData(
                 BufferTargetARB.ArrayBuffer,
                 (nuint)(data.Length * sizeof(float)),
                 pointer,
@@ -644,17 +745,27 @@ public sealed unsafe class SceneView : OpenGlControlBase
     {
         GL gl = _gl!;
 
+        gl.BindVertexArray(_vao);
+
         gl.BindBuffer(
             BufferTargetARB.ArrayBuffer,
             _gridBuffer);
 
         gl.VertexAttribPointer(
-            0, 3, VertexAttribPointerType.Float,
-            false, VertexStride, (void*)0);
+            0,
+            3,
+            VertexAttribPointerType.Float,
+            false,
+            VertexStride,
+            (void*)0);
 
         gl.VertexAttribPointer(
-            1, 2, VertexAttribPointerType.Float,
-            false, VertexStride, (void*)(3 * sizeof(float)));
+            1,
+            2,
+            VertexAttribPointerType.Float,
+            false,
+            VertexStride,
+            (void*)(3 * sizeof(float)));
 
         Matrix4x4 identity = Matrix4x4.Identity;
 
@@ -664,119 +775,22 @@ public sealed unsafe class SceneView : OpenGlControlBase
             false,
             (float*)&identity);
 
+        gl.Uniform1(_gridLocation, 1);
         gl.Uniform1(_hasTextureLocation, 0);
-        gl.Uniform3(_tintLocation, 0.2f, 0.32f, 0.45f);
+
+        gl.Uniform3(
+            _tintLocation,
+            0.2f,
+            0.32f,
+            0.45f);
 
         gl.DrawArrays(
             PrimitiveType.Lines,
             0,
             41 * 4);
-    }
 
-    protected override void OnPointerPressed(
-        PointerPressedEventArgs e)
-    {
-        base.OnPointerPressed(e);
-
-        PointerPointProperties properties =
-            e.GetCurrentPoint(this).Properties;
-
-        _orbiting = properties.IsLeftButtonPressed;
-
-        _panning =
-            properties.IsRightButtonPressed ||
-            properties.IsMiddleButtonPressed;
-
-        if (_orbiting || _panning)
-        {
-            _lastPointer = e.GetPosition(this);
-            e.Pointer.Capture(this);
-            Focus();
-            e.Handled = true;
-        }
-    }
-
-    protected override void OnPointerMoved(
-        PointerEventArgs e)
-    {
-        base.OnPointerMoved(e);
-
-        if (_lastPointer is null)
-        {
-            return;
-        }
-
-        Point current = e.GetPosition(this);
-        Avalonia.Vector delta = current - _lastPointer.Value;
-
-        _lastPointer = current;
-
-        if (_orbiting)
-        {
-            _yaw += (float)delta.X * 0.007f;
-
-            _pitch = Math.Clamp(
-                _pitch + (float)delta.Y * 0.007f,
-                -1.4f,
-                1.4f);
-        }
-        else if (_panning)
-        {
-            Vector3 direction = GetCameraDirection();
-
-            Vector3 right = Vector3.Normalize(
-                Vector3.Cross(Vector3.UnitY, direction));
-
-            Vector3 up = Vector3.Normalize(
-                Vector3.Cross(direction, right));
-
-            float scale = _distance /
-                          MathF.Max(1, (float)Bounds.Height);
-
-            _target -= right * ((float)delta.X * scale);
-            _target += up * ((float)delta.Y * scale);
-        }
-
-        RequestNextFrameRendering();
-        e.Handled = true;
-    }
-
-    protected override void OnPointerReleased(
-        PointerReleasedEventArgs e)
-    {
-        base.OnPointerReleased(e);
-
-        _lastPointer = null;
-        _orbiting = false;
-        _panning = false;
-
-        e.Pointer.Capture(null);
-    }
-
-    protected override void OnPointerCaptureLost(
-        PointerCaptureLostEventArgs e)
-    {
-        base.OnPointerCaptureLost(e);
-
-        _lastPointer = null;
-        _orbiting = false;
-        _panning = false;
-    }
-
-    protected override void OnPointerWheelChanged(
-        PointerWheelEventArgs e)
-    {
-        base.OnPointerWheelChanged(e);
-
-        _distance = Math.Clamp(
-            _distance * MathF.Pow(
-                0.84f,
-                (float)e.Delta.Y),
-            0.5f,
-            _radius * 50f);
-
-        RequestNextFrameRendering();
-        e.Handled = true;
+        gl.Uniform1(_gridLocation, 0);
+        gl.BindVertexArray(0);
     }
 
     private void DeleteSceneResources()
@@ -786,19 +800,24 @@ public sealed unsafe class SceneView : OpenGlControlBase
             return;
         }
 
-        foreach (GpuBuffer buffer in _buffers)
+        foreach (uint handle in _vertexBuffers)
         {
-            _gl.DeleteBuffer(buffer.VertexHandle);
-            _gl.DeleteBuffer(buffer.IndexHandle);
+            _gl.DeleteBuffer(handle);
         }
 
-        _buffers.Clear();
-
-        foreach (uint texture in _textures.Values)
+        foreach (uint handle in _indexBuffers)
         {
-            if (texture != 0)
+            _gl.DeleteBuffer(handle);
+        }
+
+        _vertexBuffers.Clear();
+        _indexBuffers.Clear();
+
+        foreach (uint handle in _textures.Values)
+        {
+            if (handle != 0)
             {
-                _gl.DeleteTexture(texture);
+                _gl.DeleteTexture(handle);
             }
         }
 

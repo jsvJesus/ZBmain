@@ -1,3 +1,5 @@
+
+using System.Text;
 using BCnEncoder.Decoder;
 using BCnEncoder.ImageSharp;
 using Core.Storage;
@@ -14,79 +16,158 @@ public sealed record TexturePixels(
 
 public sealed class MaterialTextureLoader
 {
-    private readonly Dictionary<string, string> _files =
+    private static readonly string[] Extensions =
+    [
+        ".dds",
+        ".png",
+        ".tga",
+        ".jpg",
+        ".jpeg"
+    ];
+
+    private readonly Dictionary<string, string> _paths =
         new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string?> _names =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly string _root;
+    private readonly string _logPath;
 
     public MaterialTextureLoader()
     {
-        string root = Path.Combine(
+        _root = Path.Combine(
             ProjectPaths.PacksDirectory,
             "textures");
 
-        if (!Directory.Exists(root))
+        _logPath = Path.Combine(
+            ProjectPaths.BinDirectory,
+            "logs",
+            "editor-textures.log");
+
+        if (!Directory.Exists(_root))
         {
+            WriteLog(
+                $"Папка текстур не найдена: {_root}",
+                true);
+
             return;
         }
 
-        foreach (string file in Directory.EnumerateFiles(
-                     root,
-                     "*",
-                     SearchOption.AllDirectories))
-        {
-            string extension = Path.GetExtension(file);
+        string[] files = Directory.EnumerateFiles(
+                _root,
+                "*",
+                SearchOption.AllDirectories)
+            .Where(file => Extensions.Contains(
+                Path.GetExtension(file),
+                StringComparer.OrdinalIgnoreCase))
+            .OrderBy(file => Array.FindIndex(
+                Extensions,
+                extension => extension.Equals(
+                    Path.GetExtension(file),
+                    StringComparison.OrdinalIgnoreCase)))
+            .ThenBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-            if (!extension.Equals(".dds", StringComparison.OrdinalIgnoreCase) &&
-                !extension.Equals(".png", StringComparison.OrdinalIgnoreCase) &&
-                !extension.Equals(".tga", StringComparison.OrdinalIgnoreCase) &&
-                !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase))
+        foreach (string file in files)
+        {
+            string relative = Path.GetRelativePath(
+                _root,
+                file);
+
+            string key = Normalize(relative);
+
+            if (!_paths.ContainsKey(key))
             {
-                continue;
+                _paths[key] = file;
             }
 
-            string relative = Path.GetRelativePath(root, file)
-                .Replace('\\', '/');
+            string name = Path.GetFileName(key);
 
-            string key = Path.ChangeExtension(relative, null)!
-                .Replace('\\', '/');
-
-            if (!_files.ContainsKey(key))
+            if (_names.TryGetValue(name, out string? existing))
             {
-                _files[key] = file;
+                if (existing is not null &&
+                    !existing.Equals(
+                        file,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _names[name] = null;
+                }
+            }
+            else
+            {
+                _names[name] = file;
             }
         }
+
+        WriteLog(
+            $"Папка: {_root}{Environment.NewLine}" +
+            $"Файлов текстур: {files.Length}{Environment.NewLine}" +
+            $"Уникальных путей: {_paths.Count}",
+            true);
     }
 
     public string? Resolve(string material)
     {
-        if (string.IsNullOrWhiteSpace(material))
+        string key = GetTextureKey(material);
+
+        if (string.IsNullOrEmpty(key))
         {
             return null;
         }
 
-        string textures = material;
-
-        int shaderSeparator = textures.IndexOf('/');
-
-        if (shaderSeparator >= 0)
+        if (_paths.TryGetValue(key, out string? exact))
         {
-            textures = textures[(shaderSeparator + 1)..];
+            return exact;
         }
 
-        int lightmapSeparator = textures.IndexOf(',');
+        string filename = Path.GetFileName(key);
 
-        if (lightmapSeparator >= 0)
+        return _names.TryGetValue(filename, out string? fallback)
+            ? fallback
+            : null;
+    }
+
+    public void WriteMaterialReport(
+        IEnumerable<string> materials)
+    {
+        var report = new StringBuilder();
+
+        int found = 0;
+        int missing = 0;
+
+        foreach (string material in materials)
         {
-            textures = textures[..lightmapSeparator];
+            if (string.IsNullOrWhiteSpace(material))
+            {
+                continue;
+            }
+
+            string texture = GetTextureKey(material);
+            string? path = Resolve(material);
+
+            if (path is null)
+            {
+                missing++;
+
+                report.AppendLine(
+                    $"[MISSING] {texture} | {material}");
+            }
+            else
+            {
+                found++;
+
+                report.AppendLine(
+                    $"[FOUND] {texture} -> {path}");
+            }
         }
 
-        string key = textures.Trim()
-            .Replace('\\', '/')
-            .TrimStart('/');
-
-        key = Path.ChangeExtension(key, null)!
-            .Replace('\\', '/');
-
-        return _files.GetValueOrDefault(key);
+        WriteLog(
+            $"{Environment.NewLine}Проверка материалов:" +
+            $"{Environment.NewLine}Найдено: {found}" +
+            $"{Environment.NewLine}Отсутствует: {missing}" +
+            Environment.NewLine +
+            report);
     }
 
     public TexturePixels? Load(string material)
@@ -100,34 +181,45 @@ public sealed class MaterialTextureLoader
 
         using Image<Rgba32> image = ReadImage(path);
 
-        const int maximumDimension = 2048;
+        const int maxDimension = 2048;
 
-        int width = image.Width;
-        int height = image.Height;
-
-        if (width > maximumDimension ||
-            height > maximumDimension)
+        if (image.Width > maxDimension ||
+            image.Height > maxDimension)
         {
             float scale = Math.Min(
-                maximumDimension / (float)width,
-                maximumDimension / (float)height);
+                maxDimension / (float)image.Width,
+                maxDimension / (float)image.Height);
 
-            int newWidth = Math.Max(1, (int)(width * scale));
-            int newHeight = Math.Max(1, (int)(height * scale));
+            int width = Math.Max(
+                1,
+                (int)(image.Width * scale));
+
+            int height = Math.Max(
+                1,
+                (int)(image.Height * scale));
 
             image.Mutate(context =>
-                context.Resize(newWidth, newHeight));
+                context.Resize(width, height));
         }
 
-        byte[] data = new byte[
+        byte[] pixels = new byte[
             checked(image.Width * image.Height * 4)];
 
-        image.CopyPixelDataTo(data);
+        image.CopyPixelDataTo(pixels);
 
         return new TexturePixels(
             image.Width,
             image.Height,
-            data);
+            pixels);
+    }
+
+    public void ReportError(
+        string material,
+        Exception exception)
+    {
+        WriteLog(
+            $"[ERROR] {material}: " +
+            $"{exception.GetType().Name}: {exception.Message}");
     }
 
     private static Image<Rgba32> ReadImage(string path)
@@ -144,5 +236,87 @@ public sealed class MaterialTextureLoader
         }
 
         return Image.Load<Rgba32>(stream);
+    }
+
+    private static string GetTextureKey(string material)
+    {
+        if (string.IsNullOrWhiteSpace(material))
+        {
+            return string.Empty;
+        }
+
+        string value = material.Trim();
+
+        int shaderSeparator = value.IndexOf('/');
+
+        if (shaderSeparator >= 0)
+        {
+            value = value[(shaderSeparator + 1)..];
+        }
+
+        int lightmapSeparator = value.IndexOf(',');
+
+        if (lightmapSeparator >= 0)
+        {
+            value = value[..lightmapSeparator];
+        }
+
+        return Normalize(value);
+    }
+
+    private static string Normalize(string value)
+    {
+        string path = value.Trim()
+            .Replace('\\', '/')
+            .TrimStart('/');
+
+        if (path.StartsWith(
+                "textures/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            path = path["textures/".Length..];
+        }
+
+        string extension = Path.GetExtension(path);
+
+        if (Extensions.Contains(
+                extension,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            path = path[..^extension.Length];
+        }
+
+        return path.ToLowerInvariant();
+    }
+
+    private void WriteLog(
+        string message,
+        bool overwrite = false)
+    {
+        try
+        {
+            Directory.CreateDirectory(
+                Path.GetDirectoryName(_logPath)!);
+
+            string text =
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] " +
+                message +
+                Environment.NewLine;
+
+            if (overwrite)
+            {
+                File.WriteAllText(_logPath, text);
+            }
+            else
+            {
+                File.AppendAllText(_logPath, text);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }

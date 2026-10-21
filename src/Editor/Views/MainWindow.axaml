@@ -17,6 +17,7 @@
 
             <StackPanel Orientation="Horizontal"
                         Spacing="12">
+
                 <Button Content="Новая сцена"
                         Click="NewSceneClicked" />
 
@@ -69,14 +70,28 @@
                   RowDefinitions="*,Auto"
                   Background="#0C131E">
 
-                <controls:SceneView x:Name="SceneView"
-                                    Grid.Row="0" />
+                <Grid Grid.Row="0"
+                      ClipToBounds="True">
+
+                    <controls:SceneView x:Name="SceneView"
+                                        IsHitTestVisible="False" />
+
+                    <Border x:Name="SceneInputOverlay"
+                            Background="Transparent"
+                            Focusable="True"
+                            PointerPressed="ScenePointerPressed"
+                            PointerMoved="ScenePointerMoved"
+                            PointerReleased="ScenePointerReleased"
+                            PointerWheelChanged="ScenePointerWheel"
+                            PointerCaptureLost="ScenePointerCaptureLost"
+                            KeyDown="SceneKeyDown" />
+                </Grid>
 
                 <Border Grid.Row="1"
                         Background="#162234"
                         Padding="12">
 
-                    <TextBlock Text="3D: ЛКМ — вращение, ПКМ/СКМ — перемещение, колесо — приближение. Пустая сцена при запуске."
+                    <TextBlock Text="ЛКМ: вращать | ПКМ/СКМ: перемещать | Колесо: масштаб | WASD: движение | Q/E: высота | R: камера"
                                Foreground="#91A6BD"
                                FontSize="12"
                                TextWrapping="Wrap" />
@@ -108,7 +123,7 @@
                             Click="OpenClicked" />
 
                     <TextBlock Grid.Row="4"
-                               Text="Текстуры: packs/textures (не копируются)"
+                               Text="Текстуры: packs/textures"
                                TextWrapping="Wrap"
                                FontSize="11"
                                Foreground="#91A6BD" />
