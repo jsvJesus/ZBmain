@@ -9,11 +9,13 @@
         <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     </PropertyGroup>
     <ItemGroup>
-        <PackageReference Include="Avalonia.Desktop" />
         <PackageReference Include="Avalonia" />
+        <PackageReference Include="Avalonia.Desktop" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
         <PackageReference Include="Silk.NET.OpenGL" />
+        <PackageReference Include="BCnEncoder.Net" />
         <PackageReference Include="BCnEncoder.Net.ImageSharp" />
+        <PackageReference Include="SixLabors.ImageSharp" />
         <ProjectReference Include="..\Core\Core.csproj" />
     </ItemGroup>
 </Project>

@@ -1,5 +1,3 @@
-
-using System.Net.Mime;
 using BCnEncoder.Decoder;
 using BCnEncoder.ImageSharp;
 using Core.Storage;
@@ -145,6 +143,6 @@ public sealed class MaterialTextureLoader
             return decoder.DecodeToImageRgba32(stream);
         }
 
-        return MediaTypeNames.Image.Load<Rgba32>(stream);
+        return Image.Load<Rgba32>(stream);
     }
 }
