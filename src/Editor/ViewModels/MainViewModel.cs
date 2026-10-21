@@ -1,45 +1,59 @@
+
 using System.Collections.ObjectModel;
-using Core.Storage;
+using Core.Levels;
 
 namespace Editor.ViewModels;
 
 public sealed class MainViewModel : ViewModelBase
 {
-    private readonly PackCatalog _catalog;
-    private PackEntry? _selectedEntry;
-    private string _statusText = "Готово";
+    private readonly LevelArchiveImporter _importer = new();
+    private readonly LevelPreviewReader _reader = new();
 
-    public MainViewModel(PackCatalog catalog)
+    private string? _selectedSource;
+    private string? _selectedPackage;
+    private string _sceneTitle = "Пустая сцена";
+    private string _statusText = "Готово. Сцена не загружена.";
+    private LevelPreview? _preview;
+    private bool _isBusy;
+
+    public MainViewModel()
     {
-        _catalog = catalog;
         Refresh();
     }
 
-    public ObservableCollection<PackEntry> Entries { get; } = new();
+    public ObservableCollection<string> SourceLevels { get; } = new();
 
-    public string PacksPath => ProjectPaths.PacksDirectory;
+    public ObservableCollection<string> SavedLevels { get; } = new();
 
-    public string SelectedName => SelectedEntry?.Name ?? "Выберите элемент из списка слева";
+    public LevelPreview? Preview => _preview;
 
-    public string SelectedType => SelectedEntry?.TypeName ?? "—";
-
-    public string SelectedPath => SelectedEntry?.FullPath ?? "—";
-
-    public PackEntry? SelectedEntry
+    public string? SelectedSource
     {
-        get => _selectedEntry;
+        get => _selectedSource;
         set
         {
-            if (ReferenceEquals(_selectedEntry, value))
-            {
-                return;
-            }
-
-            _selectedEntry = value;
+            _selectedSource = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(SelectedName));
-            OnPropertyChanged(nameof(SelectedType));
-            OnPropertyChanged(nameof(SelectedPath));
+        }
+    }
+
+    public string? SelectedPackage
+    {
+        get => _selectedPackage;
+        set
+        {
+            _selectedPackage = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string SceneTitle
+    {
+        get => _sceneTitle;
+        private set
+        {
+            _sceneTitle = value;
+            OnPropertyChanged();
         }
     }
 
@@ -55,26 +69,126 @@ public sealed class MainViewModel : ViewModelBase
 
     public void Refresh()
     {
+        string? oldSource = SelectedSource;
+        string? oldPackage = SelectedPackage;
+
+        SourceLevels.Clear();
+        SavedLevels.Clear();
+
+        foreach (string name in LevelPaths.FindImports())
+        {
+            SourceLevels.Add(name);
+        }
+
+        foreach (string name in LevelPaths.FindPackages())
+        {
+            SavedLevels.Add(name);
+        }
+
+        SelectedSource = SourceLevels.Contains(oldSource)
+            ? oldSource
+            : null;
+
+        SelectedPackage = SavedLevels.Contains(oldPackage)
+            ? oldPackage
+            : null;
+    }
+
+    public void NewScene()
+    {
+        _preview = null;
+
+        OnPropertyChanged(nameof(Preview));
+
+        SceneTitle = "Пустая сцена";
+        StatusText = "Создана пустая сцена.";
+    }
+
+    public async Task ImportSelectedAsync()
+    {
+        if (_isBusy || string.IsNullOrWhiteSpace(SelectedSource))
+        {
+            StatusText = "Выберите исходный уровень слева.";
+            return;
+        }
+
+        _isBusy = true;
+
+        string name = SelectedSource;
+
+        StatusText =
+            $"Импорт {name}: обработка исходных данных...";
+
         try
         {
-            IReadOnlyList<PackEntry> items = _catalog.GetTopLevelEntries();
-            SelectedEntry = null;
-            Entries.Clear();
+            LevelImportResult result = await Task.Run(
+                () => _importer.Import(name));
 
-            foreach (PackEntry item in items)
-            {
-                Entries.Add(item);
-            }
+            Refresh();
 
-            StatusText = $"Готово · объектов в packs: {Entries.Count}";
+            SelectedPackage = name;
+
+            await OpenSelectedAsync();
+
+            StatusText =
+                $"Импортировано: {result.FileCount} файлов, " +
+                $"{result.Vertices:N0} вершин, " +
+                $"{result.Triangles:N0} граней коллизии.";
         }
-        catch (IOException exception)
+        catch (Exception exception) when (
+            exception is IOException or
+                UnauthorizedAccessException or
+                InvalidDataException or
+                ArgumentException)
         {
-            StatusText = $"Ошибка доступа к ресурсам: {exception.Message}";
+            StatusText =
+                "Ошибка импорта: " + exception.Message;
         }
-        catch (UnauthorizedAccessException exception)
+        finally
         {
-            StatusText = $"Недостаточно прав: {exception.Message}";
+            _isBusy = false;
+        }
+    }
+
+    public async Task OpenSelectedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedPackage))
+        {
+            StatusText =
+                "Выберите сохранённый уровень справа.";
+            return;
+        }
+
+        string name = SelectedPackage;
+
+        StatusText = $"Загрузка {name}...";
+
+        try
+        {
+            LevelPreview preview = await Task.Run(
+                () => _reader.Read(
+                    LevelPaths.PackagePath(name)));
+
+            _preview = preview;
+
+            OnPropertyChanged(nameof(Preview));
+
+            SceneTitle = preview.Name;
+
+            StatusText =
+                $"Открыто: {name}. " +
+                "Отображается каркас коллизий (вид сверху).";
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+                UnauthorizedAccessException or
+                InvalidDataException or
+                ArgumentException or
+                System.Text.Json.JsonException or
+                OverflowException)
+        {
+            StatusText =
+                "Ошибка открытия: " + exception.Message;
         }
     }
 }
