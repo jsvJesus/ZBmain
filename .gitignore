@@ -1,0 +1,20 @@
+# Build output / generated intermediates
+/bin/*
+!/bin/packs/
+/bin/packs/*
+!/bin/packs/.gitkeep
+/src/**/bin/
+/src/**/obj/
+/server/**/bin/
+/server/**/obj/
+
+# IDE / local settings
+.idea/
+.vs/
+*.user
+*.suo
+*.DotSettings.user
+
+# OS
+.DS_Store
+Thumbs.db

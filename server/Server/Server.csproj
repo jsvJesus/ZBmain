@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>Server</AssemblyName>
+        <RootNamespace>Server</RootNamespace>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>false</SelfContained>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Core\Core.csproj" />
+    </ItemGroup>
+</Project>

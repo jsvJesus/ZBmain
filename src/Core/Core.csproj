@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <AssemblyName>Core</AssemblyName>
+        <RootNamespace>Core</RootNamespace>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+</Project>
