@@ -7,24 +7,28 @@ using System.Text.Json;
 namespace Core.Levels;
 
 public readonly record struct PreviewTriangle(
-    Vector2 A,
-    Vector2 B,
-    Vector2 C);
+    Vector3 A,
+    Vector3 B,
+    Vector3 C,
+    ushort Material);
 
 public sealed record LevelPreview(
     string Name,
     IReadOnlyList<PreviewTriangle> Triangles,
-    Vector2 Min,
-    Vector2 Max,
+    Vector3 Min,
+    Vector3 Max,
     uint SourceVertexCount,
-    uint SourceTriangleCount);
+    uint SourceTriangleCount,
+    bool HasVisualGeometry,
+    int VisualMeshes,
+    long VisualTriangles,
+    int Materials);
 
 public sealed class LevelPreviewReader
 {
     public LevelPreview Read(string packagePath)
     {
-        using ZipArchive archive =
-            ZipFile.OpenRead(packagePath);
+        using ZipArchive archive = ZipFile.OpenRead(packagePath);
 
         ZipArchiveEntry manifestEntry =
             archive.GetEntry("scene.json") ??
@@ -41,6 +45,69 @@ public sealed class LevelPreviewReader
                     "Повреждён scene.json.");
         }
 
+        ZipArchiveEntry? visualEntry =
+            archive.GetEntry("geometry/preview.zmesh");
+
+        if (visualEntry is not null)
+        {
+            using Stream stream = visualEntry.Open();
+
+            using var reader = new BinaryReader(
+                stream,
+                Encoding.UTF8);
+
+            if (!reader.ReadBytes(4).SequenceEqual(
+                    "ZPRV"u8.ToArray()) ||
+                reader.ReadInt32() != 1)
+            {
+                throw new InvalidDataException(
+                    "Неизвестная версия preview.zmesh.");
+            }
+
+            int count = reader.ReadInt32();
+
+            if (count < 0 || count > 200_000)
+            {
+                throw new InvalidDataException(
+                    "Повреждено количество граней preview.zmesh.");
+            }
+
+            Vector3 min = ReadVector3(reader);
+            Vector3 max = ReadVector3(reader);
+
+            var faces = new PreviewTriangle[count];
+
+            for (int i = 0; i < count; i++)
+            {
+                faces[i] = new PreviewTriangle(
+                    ReadVector3(reader),
+                    ReadVector3(reader),
+                    ReadVector3(reader),
+                    reader.ReadUInt16());
+            }
+
+            return new LevelPreview(
+                manifest.Name,
+                faces,
+                min,
+                max,
+                manifest.CollisionVertices,
+                manifest.CollisionTriangles,
+                true,
+                manifest.VisualMeshes,
+                manifest.VisualTriangles,
+                manifest.Materials);
+        }
+
+        return ReadLegacyCollision(
+            archive,
+            manifest);
+    }
+
+    private static LevelPreview ReadLegacyCollision(
+        ZipArchive archive,
+        LevelManifest manifest)
+    {
         ZipArchiveEntry? mesh =
             archive.GetEntry("geometry/collision.zmesh");
 
@@ -48,9 +115,13 @@ public sealed class LevelPreviewReader
         {
             return new LevelPreview(
                 manifest.Name,
-                Array.Empty<PreviewTriangle>(),
-                new Vector2(-50),
-                new Vector2(50),
+                [],
+                new Vector3(-50),
+                new Vector3(50),
+                0,
+                0,
+                false,
+                0,
                 0,
                 0);
         }
@@ -59,8 +130,7 @@ public sealed class LevelPreviewReader
 
         using var reader = new BinaryReader(
             stream,
-            Encoding.UTF8,
-            leaveOpen: false);
+            Encoding.UTF8);
 
         if (!reader.ReadBytes(4).SequenceEqual(
                 "ZMSH"u8.ToArray()) ||
@@ -73,41 +143,30 @@ public sealed class LevelPreviewReader
         uint vertexCount = reader.ReadUInt32();
         uint triangleCount = reader.ReadUInt32();
 
-        float[] box = new float[6];
-
-        for (int i = 0; i < box.Length; i++)
-        {
-            box[i] = reader.ReadSingle();
-        }
+        Vector3 min = ReadVector3(reader);
+        Vector3 max = ReadVector3(reader);
 
         if (vertexCount > 20_000_000 ||
             triangleCount > 30_000_000)
         {
             throw new InvalidDataException(
-                "Геометрия превышает допустимые размеры.");
+                "Недопустимый размер коллизии.");
         }
 
-        var vertices =
-            new Vector2[checked((int)vertexCount)];
+        var vertices = new Vector3[checked((int)vertexCount)];
 
         for (int i = 0; i < vertices.Length; i++)
         {
-            float x = reader.ReadSingle();
-
-            reader.ReadSingle();
-
-            float z = reader.ReadSingle();
-
-            vertices[i] = new Vector2(x, z);
+            vertices[i] = ReadVector3(reader);
         }
 
-        long stride = Math.Max(
+        int stride = Math.Max(
             1,
-            (long)triangleCount / 3_500);
+            (int)(triangleCount / 30_000));
 
-        var preview = new List<PreviewTriangle>();
+        var faces = new List<PreviewTriangle>();
 
-        for (long i = 0; i < triangleCount; i++)
+        for (uint i = 0; i < triangleCount; i++)
         {
             uint a = reader.ReadUInt32();
             uint b = reader.ReadUInt32();
@@ -120,19 +179,32 @@ public sealed class LevelPreviewReader
                 b < vertexCount &&
                 c < vertexCount)
             {
-                preview.Add(new PreviewTriangle(
+                faces.Add(new PreviewTriangle(
                     vertices[a],
                     vertices[b],
-                    vertices[c]));
+                    vertices[c],
+                    0));
             }
         }
 
         return new LevelPreview(
             manifest.Name,
-            preview,
-            new Vector2(box[0], box[2]),
-            new Vector2(box[3], box[5]),
+            faces,
+            min,
+            max,
             vertexCount,
-            triangleCount);
+            triangleCount,
+            false,
+            0,
+            0,
+            0);
+    }
+
+    private static Vector3 ReadVector3(BinaryReader reader)
+    {
+        return new Vector3(
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle());
     }
 }

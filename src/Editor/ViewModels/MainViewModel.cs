@@ -11,8 +11,10 @@ public sealed class MainViewModel : ViewModelBase
 
     private string? _selectedSource;
     private string? _selectedPackage;
+
     private string _sceneTitle = "Пустая сцена";
     private string _statusText = "Готово. Сцена не загружена.";
+
     private LevelPreview? _preview;
     private bool _isBusy;
 
@@ -106,7 +108,13 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task ImportSelectedAsync()
     {
-        if (_isBusy || string.IsNullOrWhiteSpace(SelectedSource))
+        if (_isBusy)
+        {
+            StatusText = "Импорт уже выполняется.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(SelectedSource))
         {
             StatusText = "Выберите исходный уровень слева.";
             return;
@@ -117,7 +125,7 @@ public sealed class MainViewModel : ViewModelBase
         string name = SelectedSource;
 
         StatusText =
-            $"Импорт {name}: обработка исходных данных...";
+            $"Импорт {name}: конвертация геометрии...";
 
         try
         {
@@ -125,21 +133,24 @@ public sealed class MainViewModel : ViewModelBase
                 () => _importer.Import(name));
 
             Refresh();
-
             SelectedPackage = name;
 
             await OpenSelectedAsync();
 
             StatusText =
-                $"Импортировано: {result.FileCount} файлов, " +
-                $"{result.Vertices:N0} вершин, " +
-                $"{result.Triangles:N0} граней коллизии.";
+                $"Импортировано: {result.FileCount} файлов. " +
+                $"Коллизия: {result.Vertices:N0} вершин, " +
+                $"{result.Triangles:N0} граней. " +
+                $"Визуальных мешей: {result.VisualMeshes:N0}, " +
+                $"треугольников: {result.VisualTriangles:N0}.";
         }
         catch (Exception exception) when (
             exception is IOException or
                 UnauthorizedAccessException or
                 InvalidDataException or
-                ArgumentException)
+                ArgumentException or
+                NotSupportedException or
+                OverflowException)
         {
             StatusText =
                 "Ошибка импорта: " + exception.Message;
@@ -175,9 +186,21 @@ public sealed class MainViewModel : ViewModelBase
 
             SceneTitle = preview.Name;
 
-            StatusText =
-                $"Открыто: {name}. " +
-                "Отображается каркас коллизий (вид сверху).";
+            if (preview.HasVisualGeometry)
+            {
+                StatusText =
+                    $"Открыто: {name}. " +
+                    $"Визуальных мешей: {preview.VisualMeshes:N0}, " +
+                    $"треугольников: {preview.VisualTriangles:N0}, " +
+                    $"материалов: {preview.Materials:N0}.";
+            }
+            else
+            {
+                StatusText =
+                    $"Открыто: {name}. " +
+                    "Визуальная геометрия отсутствует. " +
+                    "Отображаются коллизии.";
+            }
         }
         catch (Exception exception) when (
             exception is IOException or

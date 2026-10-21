@@ -11,10 +11,17 @@ public sealed record LevelManifest(
     DateTime ImportedUtc,
     IReadOnlyList<LevelFileRecord> Files,
     uint CollisionVertices,
-    uint CollisionTriangles);
+    uint CollisionTriangles,
+    int VisualMeshes = 0,
+    long VisualTriangles = 0,
+    int Materials = 0,
+    string VisualStatus = "not-converted");
 
 public sealed record LevelImportResult(
     string PackagePath,
     int FileCount,
     uint Vertices,
-    uint Triangles);
+    uint Triangles,
+    int VisualMeshes = 0,
+    long VisualTriangles = 0,
+    string VisualStatus = "not-converted");

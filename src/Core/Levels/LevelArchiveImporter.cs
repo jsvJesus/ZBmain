@@ -1,16 +1,20 @@
 
 using System.IO.Compression;
 using System.Text.Json;
+using Core.Levels.XRay;
 
 namespace Core.Levels;
 
 public sealed class LevelArchiveImporter
 {
+    private readonly XRayGeometryConverter _visualConverter = new();
+
     public LevelImportResult Import(string levelName)
     {
         LevelPaths.EnsureDirectories();
 
         string target = LevelPaths.PackagePath(levelName);
+
         string sourceDirectory = Path.Combine(
             LevelPaths.ImportDirectory,
             levelName);
@@ -30,14 +34,17 @@ public sealed class LevelArchiveImporter
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (!inputFiles.Any(path =>
-                Path.GetFileName(path).Equals(
-                    "level",
-                    StringComparison.OrdinalIgnoreCase)) &&
-            !inputFiles.Any(path =>
-                Path.GetFileName(path).Equals(
-                    "level.geom",
-                    StringComparison.OrdinalIgnoreCase)))
+        string? levelFile = inputFiles.FirstOrDefault(path =>
+            Path.GetFileName(path).Equals(
+                "level",
+                StringComparison.OrdinalIgnoreCase));
+
+        string? geomFile = inputFiles.FirstOrDefault(path =>
+            Path.GetFileName(path).Equals(
+                "level.geom",
+                StringComparison.OrdinalIgnoreCase));
+
+        if (levelFile is null && geomFile is null)
         {
             throw new InvalidDataException(
                 "Не найден основной файл level или level.geom.");
@@ -52,8 +59,11 @@ public sealed class LevelArchiveImporter
         {
             var records = new List<LevelFileRecord>();
 
-            uint vertices = 0;
-            uint triangles = 0;
+            uint collisionVertices = 0;
+            uint collisionTriangles = 0;
+
+            VisualConversionResult? visuals = null;
+            string visualStatus = "missing level or level.geom";
 
             using (var stream = new FileStream(
                        temporaryFile,
@@ -62,8 +72,7 @@ public sealed class LevelArchiveImporter
                        FileShare.None))
             using (var archive = new ZipArchive(
                        stream,
-                       ZipArchiveMode.Create,
-                       leaveOpen: false))
+                       ZipArchiveMode.Create))
             {
                 foreach (string inputFile in inputFiles)
                 {
@@ -72,12 +81,9 @@ public sealed class LevelArchiveImporter
                             inputFile)
                         .Replace('\\', '/');
 
-                    string entryName = "source/" + relative;
-
-                    ZipArchiveEntry entry =
-                        archive.CreateEntry(
-                            entryName,
-                            CompressionLevel.NoCompression);
+                    ZipArchiveEntry entry = archive.CreateEntry(
+                        "source/" + relative,
+                        CompressionLevel.NoCompression);
 
                     using (Stream input = File.OpenRead(inputFile))
                     using (Stream output = entry.Open())
@@ -91,18 +97,14 @@ public sealed class LevelArchiveImporter
                             "level.cform",
                             StringComparison.OrdinalIgnoreCase))
                     {
-                        ZipArchiveEntry geometry =
-                            archive.CreateEntry(
-                                "geometry/collision.zmesh",
-                                CompressionLevel.NoCompression);
+                        ZipArchiveEntry collision = archive.CreateEntry(
+                            "geometry/collision.zmesh",
+                            CompressionLevel.NoCompression);
 
-                        using Stream source =
-                            File.OpenRead(inputFile);
+                        using Stream source = File.OpenRead(inputFile);
+                        using Stream destination = collision.Open();
 
-                        using Stream destination =
-                            geometry.Open();
-
-                        (vertices, triangles) =
+                        (collisionVertices, collisionTriangles) =
                             CollisionConverter.Convert(
                                 source,
                                 destination);
@@ -116,18 +118,52 @@ public sealed class LevelArchiveImporter
                         mode));
                 }
 
+                if (levelFile is not null && geomFile is not null)
+                {
+                    using var previewBuffer = new MemoryStream();
+
+                    ZipArchiveEntry renderGeometry = archive.CreateEntry(
+                        "geometry/render.zgeom",
+                        CompressionLevel.NoCompression);
+
+                    using (Stream geometryStream = renderGeometry.Open())
+                    {
+                        visuals = _visualConverter.Convert(
+                            levelFile,
+                            geomFile,
+                            geometryStream,
+                            previewBuffer);
+                    }
+
+                    ZipArchiveEntry renderPreview = archive.CreateEntry(
+                        "geometry/preview.zmesh",
+                        CompressionLevel.NoCompression);
+
+                    previewBuffer.Position = 0;
+
+                    using (Stream previewStream = renderPreview.Open())
+                    {
+                        previewBuffer.CopyTo(previewStream);
+                    }
+
+                    visualStatus = "converted-xray14";
+                }
+
                 var manifest = new LevelManifest(
-                    1,
+                    2,
                     levelName,
                     DateTime.UtcNow,
                     records,
-                    vertices,
-                    triangles);
+                    collisionVertices,
+                    collisionTriangles,
+                    visuals?.Meshes ?? 0,
+                    visuals?.Triangles ?? 0,
+                    visuals?.Materials ?? 0,
+                    visualStatus);
 
-                ZipArchiveEntry scene =
-                    archive.CreateEntry(
-                        "scene.json",
-                        CompressionLevel.Optimal);
+                ZipArchiveEntry scene = archive.CreateEntry(
+                    "scene.json",
+                    CompressionLevel.Optimal);
 
                 using Stream sceneStream = scene.Open();
 
@@ -148,8 +184,11 @@ public sealed class LevelArchiveImporter
             return new LevelImportResult(
                 target,
                 inputFiles.Length,
-                vertices,
-                triangles);
+                collisionVertices,
+                collisionTriangles,
+                visuals?.Meshes ?? 0,
+                visuals?.Triangles ?? 0,
+                visualStatus);
         }
         finally
         {

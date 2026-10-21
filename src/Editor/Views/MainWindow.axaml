@@ -9,19 +9,24 @@
         MinWidth="980"
         MinHeight="600"
         Background="#0C131E">
+
     <Grid RowDefinitions="Auto,*,Auto">
         <Border Grid.Row="0"
                 Background="#131E2D"
                 Padding="16,12">
+
             <StackPanel Orientation="Horizontal"
                         Spacing="12">
                 <Button Content="Новая сцена"
                         Click="NewSceneClicked" />
+
                 <Button Content="Обновить списки"
                         Click="RefreshClicked" />
+
                 <TextBlock Text="|"
                            VerticalAlignment="Center"
                            Foreground="#607188" />
+
                 <TextBlock Text="{Binding SceneTitle}"
                            FontSize="18"
                            FontWeight="SemiBold"
@@ -37,18 +42,23 @@
             <Border Grid.Column="0"
                     Background="#162234"
                     Padding="12">
+
                 <Grid RowDefinitions="Auto,Auto,*,Auto"
                       RowSpacing="10">
+
                     <TextBlock Text="ИСТОЧНИКИ"
                                FontWeight="Bold"
                                Foreground="#DCEBFA" />
+
                     <TextBlock Grid.Row="1"
                                Text="packs/import/levels"
                                FontSize="11"
                                Foreground="#91A6BD" />
+
                     <ListBox Grid.Row="2"
                              ItemsSource="{Binding SourceLevels}"
                              SelectedItem="{Binding SelectedSource, Mode=TwoWay}" />
+
                     <Button Grid.Row="3"
                             Content="Импортировать"
                             Click="ImportClicked" />
@@ -58,12 +68,15 @@
             <Grid Grid.Column="1"
                   RowDefinitions="*,Auto"
                   Background="#0C131E">
+
                 <controls:SceneView x:Name="SceneView"
                                     Grid.Row="0" />
+
                 <Border Grid.Row="1"
                         Background="#162234"
                         Padding="12">
-                    <TextBlock Text="Сцена: пустая при запуске. После импорта показывается проекция коллизий X/Z."
+
+                    <TextBlock Text="3D: ЛКМ — вращение, ПКМ/СКМ — перемещение, колесо — приближение. Пустая сцена при запуске."
                                Foreground="#91A6BD"
                                FontSize="12"
                                TextWrapping="Wrap" />
@@ -73,21 +86,27 @@
             <Border Grid.Column="2"
                     Background="#162234"
                     Padding="12">
+
                 <Grid RowDefinitions="Auto,Auto,*,Auto,Auto"
                       RowSpacing="10">
+
                     <TextBlock Text="НАШ ФОРМАТ"
                                FontWeight="Bold"
                                Foreground="#DCEBFA" />
+
                     <TextBlock Grid.Row="1"
                                Text="packs/levels/*.zrlevel"
                                FontSize="11"
                                Foreground="#91A6BD" />
+
                     <ListBox Grid.Row="2"
                              ItemsSource="{Binding SavedLevels}"
                              SelectedItem="{Binding SelectedPackage, Mode=TwoWay}" />
+
                     <Button Grid.Row="3"
                             Content="Открыть уровень"
                             Click="OpenClicked" />
+
                     <TextBlock Grid.Row="4"
                                Text="Текстуры: packs/textures (не копируются)"
                                TextWrapping="Wrap"
@@ -100,6 +119,7 @@
         <Border Grid.Row="2"
                 Background="#131E2D"
                 Padding="16,10">
+
             <TextBlock Text="{Binding StatusText}"
                        Foreground="#BFD4EA"
                        TextWrapping="Wrap" />
