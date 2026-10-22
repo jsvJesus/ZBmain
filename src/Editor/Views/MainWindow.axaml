@@ -17,7 +17,6 @@
 
             <StackPanel Orientation="Horizontal"
                         Spacing="12">
-
                 <Button Content="Новая сцена"
                         Click="NewSceneClicked" />
 
@@ -67,35 +66,23 @@
             </Border>
 
             <Grid Grid.Column="1"
-                  RowDefinitions="*,Auto"
+                  ClipToBounds="True"
                   Background="#0C131E">
 
-                <Grid Grid.Row="0"
-                      ClipToBounds="True">
+                <controls:SceneView x:Name="SceneView"
+                                    IsHitTestVisible="False" />
 
-                    <controls:SceneView x:Name="SceneView"
-                                        IsHitTestVisible="False" />
-
-                    <Border x:Name="SceneInputOverlay"
-                            Background="Transparent"
-                            Focusable="True"
-                            PointerPressed="ScenePointerPressed"
-                            PointerMoved="ScenePointerMoved"
-                            PointerReleased="ScenePointerReleased"
-                            PointerWheelChanged="ScenePointerWheel"
-                            PointerCaptureLost="ScenePointerCaptureLost"
-                            KeyDown="SceneKeyDown" />
-                </Grid>
-
-                <Border Grid.Row="1"
-                        Background="#162234"
-                        Padding="12">
-
-                    <TextBlock Text="ЛКМ: вращать | ПКМ/СКМ: перемещать | Колесо: масштаб | WASD: движение | Q/E: высота | R: камера"
-                               Foreground="#91A6BD"
-                               FontSize="12"
-                               TextWrapping="Wrap" />
-                </Border>
+                <Border x:Name="SceneInputOverlay"
+                        Background="Transparent"
+                        Focusable="True"
+                        PointerPressed="ScenePointerPressed"
+                        PointerMoved="ScenePointerMoved"
+                        PointerReleased="ScenePointerReleased"
+                        PointerCaptureLost="ScenePointerCaptureLost"
+                        PointerWheelChanged="ScenePointerWheel"
+                        KeyDown="SceneKeyDown"
+                        KeyUp="SceneKeyUp"
+                        LostFocus="SceneLostFocus" />
             </Grid>
 
             <Border Grid.Column="2"

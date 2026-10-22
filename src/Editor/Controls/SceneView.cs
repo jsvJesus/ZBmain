@@ -1,7 +1,6 @@
 
 using System.Numerics;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Core.Levels;
@@ -14,6 +13,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 {
     private const int VertexStride = 5 * sizeof(float);
     private const int MaxTextureUploadsPerFrame = 2;
+    private const float MouseSensitivity = 0.003f;
 
     private GL? _gl;
 
@@ -33,21 +33,21 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
     private readonly List<uint> _vertexBuffers = new();
     private readonly List<uint> _indexBuffers = new();
-
     private readonly Dictionary<int, uint> _textures = new();
 
-    private Vector3 _target;
+    private Vector3 _cameraPosition = new(80f, 60f, 80f);
 
+    private float _yaw;
+    private float _pitch;
     private float _radius = 100f;
-    private float _distance = 250f;
-    private float _yaw = 0.7f;
-    private float _pitch = 0.5f;
+    private float _movementSpeed = 20f;
 
     private bool _resourcesDirty = true;
 
     public SceneView()
     {
         ClipToBounds = true;
+        ResetCamera();
     }
 
     public RenderLevel? Scene
@@ -63,91 +63,146 @@ public sealed unsafe class SceneView : OpenGlControlBase
         }
     }
 
+    public float MovementSpeed => _movementSpeed;
+
     public void ResetCamera()
     {
-        _yaw = 0.7f;
-        _pitch = 0.5f;
+        Vector3 target;
 
         if (_scene is null)
         {
-            _target = Vector3.Zero;
+            target = Vector3.Zero;
             _radius = 100f;
         }
         else
         {
-            _target = (_scene.Min + _scene.Max) / 2f;
+            target = (_scene.Min + _scene.Max) * 0.5f;
 
             _radius = MathF.Max(
                 25f,
                 (_scene.Max - _scene.Min).Length() * 0.5f);
         }
 
-        _distance = _radius * 2.5f;
+        _cameraPosition = target + new Vector3(
+            _radius * 0.9f,
+            _radius * 0.65f,
+            _radius * 0.9f);
+
+        Vector3 direction = Vector3.Normalize(
+            target - _cameraPosition);
+
+        _yaw = MathF.Atan2(
+            direction.X,
+            -direction.Z);
+
+        _pitch = MathF.Asin(
+            Math.Clamp(direction.Y, -1f, 1f));
+
+        _movementSpeed = Math.Clamp(
+            _radius * 0.08f,
+            10f,
+            120f);
 
         RequestNextFrameRendering();
     }
 
-    public void Orbit(float deltaX, float deltaY)
+    public void Look(float deltaX, float deltaY)
     {
-        _yaw += deltaX * 0.007f;
+        _yaw += deltaX * MouseSensitivity;
 
         _pitch = Math.Clamp(
-            _pitch + deltaY * 0.007f,
-            -1.45f,
-            1.45f);
+            _pitch - deltaY * MouseSensitivity,
+            -1.5533f,
+            1.5533f);
+
+        if (_yaw > MathF.PI)
+        {
+            _yaw -= 2f * MathF.PI;
+        }
+        else if (_yaw < -MathF.PI)
+        {
+            _yaw += 2f * MathF.PI;
+        }
 
         RequestNextFrameRendering();
     }
 
-    public void Pan(float deltaX, float deltaY)
+    public void AdjustSpeed(float wheelSteps)
     {
-        Vector3 direction = GetCameraDirection();
+        if (wheelSteps == 0f)
+        {
+            return;
+        }
 
-        Vector3 right = Vector3.Normalize(
-            Vector3.Cross(Vector3.UnitY, direction));
-
-        Vector3 up = Vector3.Normalize(
-            Vector3.Cross(direction, right));
-
-        float scale = _distance /
-                      MathF.Max(1f, (float)Bounds.Height);
-
-        _target -= right * (deltaX * scale);
-        _target += up * (deltaY * scale);
-
-        RequestNextFrameRendering();
-    }
-
-    public void Zoom(float steps)
-    {
-        _distance = Math.Clamp(
-            _distance * MathF.Pow(0.84f, steps),
+        _movementSpeed = Math.Clamp(
+            _movementSpeed * MathF.Pow(1.25f, wheelSteps),
             0.5f,
-            _radius * 50f);
+            3000f);
+    }
+
+    public void Fly(Vector3 input, float deltaTime)
+    {
+        if (deltaTime <= 0f ||
+            input.LengthSquared() <= 0f)
+        {
+            return;
+        }
+
+        if (input.LengthSquared() > 1f)
+        {
+            input = Vector3.Normalize(input);
+        }
+
+        Vector3 forward = GetLookDirection();
+
+        Vector3 right = Vector3.Normalize(
+            Vector3.Cross(forward, Vector3.UnitY));
+
+        Vector3 movement =
+            right * input.X +
+            Vector3.UnitY * input.Y +
+            forward * input.Z;
+
+        if (movement.LengthSquared() > 1f)
+        {
+            movement = Vector3.Normalize(movement);
+        }
+
+        _cameraPosition +=
+            movement * _movementSpeed * deltaTime;
 
         RequestNextFrameRendering();
     }
 
-    public void MoveCamera(
-        float forward,
-        float sideways,
-        float vertical)
+    private Vector3 GetLookDirection()
     {
-        Vector3 direction = GetCameraDirection();
+        float cosPitch = MathF.Cos(_pitch);
 
-        Vector3 horizontalForward = Vector3.Normalize(
-            new Vector3(-direction.X, 0f, -direction.Z));
+        return Vector3.Normalize(new Vector3(
+            MathF.Sin(_yaw) * cosPitch,
+            MathF.Sin(_pitch),
+            -MathF.Cos(_yaw) * cosPitch));
+    }
 
-        Vector3 right = Vector3.Normalize(
-            Vector3.Cross(Vector3.UnitY, direction));
+    private Matrix4x4 CreateViewProjection(
+        int width,
+        int height)
+    {
+        Vector3 forward = GetLookDirection();
 
-        float step = MathF.Max(0.5f, _distance * 0.025f);
+        Matrix4x4 view = Matrix4x4.CreateLookAt(
+            _cameraPosition,
+            _cameraPosition + forward,
+            Vector3.UnitY);
 
-        _target += horizontalForward * (forward * step);
-        _target += right * (sideways * step);
-        _target += Vector3.UnitY * (vertical * step);
+        Matrix4x4 projection =
+            Matrix4x4.CreatePerspectiveFieldOfView(
+                MathF.PI / 3f,
+                width / (float)height,
+                0.1f,
+                MathF.Max(10000f, _radius * 20f));
 
-        RequestNextFrameRendering();
+        return view * projection;
     }
 
     protected override void OnOpenGlInit(GlInterface context)
@@ -271,22 +326,28 @@ public sealed unsafe class SceneView : OpenGlControlBase
         _gl.DeleteShader(fragmentShader);
 
         _viewProjectionLocation = _gl.GetUniformLocation(
-            _program, "uViewProjection");
+            _program,
+            "uViewProjection");
 
         _modelLocation = _gl.GetUniformLocation(
-            _program, "uModel");
+            _program,
+            "uModel");
 
         _tintLocation = _gl.GetUniformLocation(
-            _program, "uTint");
+            _program,
+            "uTint");
 
         _textureLocation = _gl.GetUniformLocation(
-            _program, "uTexture");
+            _program,
+            "uTexture");
 
         _hasTextureLocation = _gl.GetUniformLocation(
-            _program, "uHasTexture");
+            _program,
+            "uHasTexture");
 
         _gridLocation = _gl.GetUniformLocation(
-            _program, "uGrid");
+            _program,
+            "uGrid");
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -296,14 +357,12 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Lequal);
-
         _gl.Disable(EnableCap.CullFace);
 
         _gl.UseProgram(_program);
         _gl.Uniform1(_textureLocation, 0);
 
         CreateGrid();
-
         _resourcesDirty = true;
     }
 
@@ -331,7 +390,11 @@ public sealed unsafe class SceneView : OpenGlControlBase
             (uint)width,
             (uint)height);
 
-        gl.ClearColor(0.035f, 0.055f, 0.085f, 1f);
+        gl.ClearColor(
+            0.035f,
+            0.055f,
+            0.085f,
+            1f);
 
         gl.Clear(
             (uint)(ClearBufferMask.ColorBufferBit |
@@ -344,7 +407,6 @@ public sealed unsafe class SceneView : OpenGlControlBase
         if (_resourcesDirty)
         {
             UploadScene();
-
             _resourcesDirty = false;
         }
 
@@ -362,6 +424,8 @@ public sealed unsafe class SceneView : OpenGlControlBase
             DrawGrid();
             return;
         }
+
+        gl.Uniform1(_gridLocation, 0);
 
         int remainingUploads = MaxTextureUploadsPerFrame;
         bool needsAnotherFrame = false;
@@ -462,7 +526,6 @@ public sealed unsafe class SceneView : OpenGlControlBase
         if (success == 0)
         {
             string log = gl.GetShaderInfoLog(shader);
-
             gl.DeleteShader(shader);
 
             throw new InvalidOperationException(
@@ -555,7 +618,6 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 remainingUploads--;
 
                 texture = CreateTexture(name);
-
                 _textures.Add(materialId, texture);
             }
             else
@@ -660,39 +722,6 @@ public sealed unsafe class SceneView : OpenGlControlBase
         }
 
         return texture;
-    }
-
-    private Matrix4x4 CreateViewProjection(
-        int width,
-        int height)
-    {
-        Vector3 direction = GetCameraDirection();
-
-        Vector3 position = _target + direction * _distance;
-
-        Matrix4x4 view = Matrix4x4.CreateLookAt(
-            position,
-            _target,
-            Vector3.UnitY);
-
-        Matrix4x4 projection =
-            Matrix4x4.CreatePerspectiveFieldOfView(
-                MathF.PI / 3f,
-                width / (float)height,
-                MathF.Max(0.1f, _distance / 10000f),
-                MathF.Max(
-                    10000f,
-                    _distance + _radius * 10f));
-
-        return view * projection;
-    }
-
-    private Vector3 GetCameraDirection()
-    {
-        return new Vector3(
-            MathF.Cos(_pitch) * MathF.Sin(_yaw),
-            MathF.Sin(_pitch),
-            MathF.Cos(_pitch) * MathF.Cos(_yaw));
     }
 
     private void CreateGrid()
