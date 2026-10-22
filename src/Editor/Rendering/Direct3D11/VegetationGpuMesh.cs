@@ -17,6 +17,8 @@ internal sealed class VegetationGpuMesh : IDisposable
     private ID3D11Buffer? _indexBuffer;
     private ID3D11Buffer? _instanceBuffer;
 
+    public string TextureName { get; }
+
     public int IndexCount { get; }
     public int InstanceCount { get; }
 
@@ -32,6 +34,8 @@ internal sealed class VegetationGpuMesh : IDisposable
             throw new ArgumentException(
                 "Нельзя создать пустой GPU-меш растительности.");
         }
+
+        TextureName = model.Texture;
 
         IndexCount = model.Indices.Length;
         InstanceCount = instances.Length;

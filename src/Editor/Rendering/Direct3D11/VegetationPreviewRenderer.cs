@@ -33,7 +33,10 @@ internal sealed class VegetationPreviewRenderer : IDisposable
     private ID3D11PixelShader? _pixelShader;
     private ID3D11InputLayout? _inputLayout;
     private ID3D11RasterizerState? _rasterizer;
+    private ID3D11SamplerState? _sampler;
     private ID3D11Buffer? _frameBuffer;
+
+    private VegetationTextureCache? _textures;
 
     private Vector3 _sceneCenter;
 
@@ -45,7 +48,8 @@ internal sealed class VegetationPreviewRenderer : IDisposable
 
     public void Initialize(
         nint windowHandle,
-        DetailLevel details)
+        DetailLevel details,
+        string levelName)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -119,12 +123,25 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             CreateShaders();
             CreateMeshes(details);
 
+            _textures = new VegetationTextureCache(
+                _device,
+                _context,
+                levelName);
+
+            foreach (VegetationGpuMesh mesh in _meshes)
+            {
+                _textures.Get(mesh.TextureName);
+            }
+
             _frameBuffer = _device.CreateBuffer(
                 (uint)Marshal.SizeOf<FrameConstants>(),
                 BindFlags.ConstantBuffer);
 
             _rasterizer = _device.CreateRasterizerState(
                 RasterizerDescription.CullNone);
+
+            _sampler = _device.CreateSamplerState(
+                SamplerDescription.LinearWrap);
 
             _clock.Restart();
         }
@@ -151,7 +168,8 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             out int width,
             out int height);
 
-        if (width != _width || height != _height)
+        if (width != _width ||
+            height != _height)
         {
             Resize(width, height);
         }
@@ -191,7 +209,9 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             _vertexShader is not null &&
             _pixelShader is not null &&
             _inputLayout is not null &&
-            _rasterizer is not null)
+            _rasterizer is not null &&
+            _sampler is not null &&
+            _textures is not null)
         {
             DrawVegetation();
         }
@@ -239,8 +259,19 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             0,
             _frameBuffer);
 
+        context.PSSetSampler(
+            0,
+            _sampler);
+
         foreach (VegetationGpuMesh mesh in _meshes)
         {
+            ID3D11ShaderResourceView texture =
+                _textures!.Get(mesh.TextureName);
+
+            context.PSSetShaderResource(
+                0,
+                texture);
+
             mesh.Draw(context);
         }
     }
@@ -349,7 +380,8 @@ internal sealed class VegetationPreviewRenderer : IDisposable
 
     private void CreateRenderTargets()
     {
-        if (_device is null || _swapChain is null)
+        if (_device is null ||
+            _swapChain is null)
         {
             return;
         }
@@ -442,6 +474,7 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         _clock.Stop();
 
         _context?.UnsetRenderTargets();
+        _context?.PSUnsetShaderResources(0, 1);
         _context?.Flush();
 
         foreach (VegetationGpuMesh mesh in _meshes)
@@ -450,6 +483,12 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         }
 
         _meshes.Clear();
+
+        _textures?.Dispose();
+        _textures = null;
+
+        _sampler?.Dispose();
+        _sampler = null;
 
         ReleaseRenderTargets();
 

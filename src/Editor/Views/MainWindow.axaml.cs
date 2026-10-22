@@ -82,7 +82,10 @@ public sealed partial class MainWindow : Window
 
         var preview = new Direct3D11PreviewControl
         {
-            Vegetation = viewModel.Vegetation
+            Vegetation = viewModel.Vegetation,
+            LevelName = viewModel.Scene?.Name
+                        ?? viewModel.SelectedPackage
+                        ?? string.Empty
         };
 
         preview.RenderFailed += message =>

@@ -32,6 +32,8 @@ public sealed class Direct3D11PreviewControl : NativeControlHost
 
     public DetailLevel? Vegetation { get; set; }
 
+    public string LevelName { get; set; } = string.Empty;
+
     public event Action<string>? RenderFailed;
 
     protected override IPlatformHandle CreateNativeControlCore(
@@ -76,7 +78,8 @@ public sealed class Direct3D11PreviewControl : NativeControlHost
 
                 _renderer.Initialize(
                     _windowHandle,
-                    Vegetation);
+                    Vegetation,
+                    LevelName);
 
                 _timer.Start();
             }
@@ -88,7 +91,8 @@ public sealed class Direct3D11PreviewControl : NativeControlHost
                 _renderer = null;
 
                 RenderFailed?.Invoke(
-                    "Ошибка Direct3D 11: " + exception.Message);
+                    "Ошибка Direct3D 11: " +
+                    exception.Message);
             }
         }
 
@@ -133,7 +137,8 @@ public sealed class Direct3D11PreviewControl : NativeControlHost
             _renderer = null;
 
             RenderFailed?.Invoke(
-                "Ошибка рендеринга DX11: " + exception.Message);
+                "Ошибка рендеринга DX11: " +
+                exception.Message);
         }
     }
 

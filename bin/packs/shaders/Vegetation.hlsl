@@ -4,6 +4,9 @@ cbuffer FrameData : register(b0)
     float4 Frame;
 };
 
+Texture2D DiffuseTexture : register(t0);
+SamplerState DiffuseSampler : register(s0);
+
 struct VertexInput
 {
     float3 Position : POSITION;
@@ -91,6 +94,12 @@ PixelInput VSMain(VertexInput input)
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
+    float4 albedo = DiffuseTexture.Sample(
+        DiffuseSampler,
+        input.Uv);
+
+    clip(albedo.a - 0.48f);
+
     float3 dx = ddx(input.WorldPosition);
     float3 dy = ddy(input.WorldPosition);
 
@@ -114,27 +123,18 @@ float4 PSMain(PixelInput input) : SV_TARGET
         normal,
         lightDirection));
 
-    float lighting =
-        0.48f +
-        diffuse * 0.44f;
+    float ambient = 0.48f;
+    float direct = diffuse * 0.46f;
 
-    float3 baseColor = float3(
-        0.32f,
-        0.40f,
-        0.25f);
-
-    float uvVariation = saturate(
-        input.Uv.y) * 0.06f;
-
-    baseColor += uvVariation;
+    float lighting = ambient + direct;
 
     float heightLighting = lerp(
-        0.90f,
+        0.92f,
         1.04f,
         input.Height);
 
     float3 finalColor =
-        baseColor *
+        albedo.rgb *
         input.Tint *
         lighting *
         heightLighting;
