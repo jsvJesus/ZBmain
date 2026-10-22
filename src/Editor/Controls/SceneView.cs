@@ -553,7 +553,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         gl.BindVertexArray(_vao);
 
-        _textureLoader = new MaterialTextureLoader();
+        _textureLoader = new MaterialTextureLoader(_scene.Name);
         _textureLoader.WriteMaterialReport(_scene.Materials);
 
         foreach (RenderVertexBuffer buffer in _scene.Vertices)
