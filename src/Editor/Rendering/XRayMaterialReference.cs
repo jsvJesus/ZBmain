@@ -1,4 +1,3 @@
-
 using Core.Levels;
 
 namespace Editor.Rendering;

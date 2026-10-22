@@ -1,4 +1,3 @@
-
 using System.Diagnostics;
 using System.Numerics;
 using Avalonia;
@@ -8,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Editor.ViewModels;
 using Vector = Avalonia.Vector;
+using Editor.Controls;
 
 namespace Editor.Views;
 
@@ -35,6 +35,83 @@ public sealed partial class MainWindow : Window
         Opened += WindowOpened;
         Closed += WindowClosed;
         Deactivated += WindowDeactivated;
+    }
+
+    private void OpenVegetationPreviewClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        if (viewModel.Vegetation is null)
+        {
+            var informationWindow = new Window
+            {
+                Title = "Растительность",
+                Width = 570,
+                Height = 170,
+                Content = new TextBlock
+                {
+                    Text = "Открой уровень с импортированным " +
+                           "vegetation/details.zdetail.",
+                    Margin = new Thickness(24),
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap
+                }
+            };
+
+            informationWindow.Show(this);
+            return;
+        }
+
+        var status = new TextBlock
+        {
+            Text =
+                "Direct3D 11 | Предпросмотр растительности | " +
+                $"Ячеек: {viewModel.Vegetation.Cells.Length:N0}",
+            Margin = new Thickness(12, 8),
+            Foreground = Avalonia.Media.Brushes.White
+        };
+
+        var preview = new Direct3D11PreviewControl
+        {
+            Vegetation = viewModel.Vegetation
+        };
+
+        preview.RenderFailed += message =>
+        {
+            status.Text = message;
+        };
+
+        var layout = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            Background = Avalonia.Media.Brushes.Black
+        };
+
+        layout.Children.Add(status);
+
+        Grid.SetRow(preview, 1);
+        layout.Children.Add(preview);
+
+        var window = new Window
+        {
+            Title = "DX11 — Растительность",
+            Width = 1200,
+            Height = 800,
+            MinWidth = 640,
+            MinHeight = 440,
+            Content = layout
+        };
+
+        window.Show(this);
     }
 
     private void WindowOpened(object? sender, EventArgs e)

@@ -1,4 +1,3 @@
-
 namespace Core.Levels;
 
 public static class LevelFilePolicy

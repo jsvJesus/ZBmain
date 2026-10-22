@@ -17,5 +17,12 @@
         <PackageReference Include="BCnEncoder.Net.ImageSharp" />
         <PackageReference Include="SixLabors.ImageSharp" />
         <ProjectReference Include="..\Core\Core.csproj" />
+        <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.D3DCompiler" />
+    </ItemGroup>
+    <ItemGroup>
+      <ClCompile Include="..\..\bin\packs\shaders\Vegetation.hlsl">
+        <Link>shaders\Vegetation.hlsl</Link>
+      </ClCompile>
     </ItemGroup>
 </Project>

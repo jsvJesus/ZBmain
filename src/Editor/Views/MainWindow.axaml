@@ -1,4 +1,3 @@
-
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:Editor.Controls"
@@ -22,6 +21,9 @@
 
                 <Button Content="Обновить списки"
                         Click="RefreshClicked" />
+
+                <Button Content="DX11: растительность"
+                        Click="OpenVegetationPreviewClicked" />
 
                 <TextBlock Text="|"
                            VerticalAlignment="Center"
