@@ -8,6 +8,7 @@ public sealed class MainViewModel : ViewModelBase
 {
     private readonly LevelWorkspaceImporter _importer = new();
     private readonly RenderLevelReader _reader = new();
+    private readonly DetailLevelReader _detailReader = new();
 
     private string? _selectedSource;
     private string? _selectedPackage;
@@ -16,6 +17,7 @@ public sealed class MainViewModel : ViewModelBase
     private string _statusText = "Сцена не загружена.";
 
     private RenderLevel? _scene;
+    private DetailLevel? _vegetation;
     private bool _isBusy;
 
     public MainViewModel()
@@ -33,6 +35,16 @@ public sealed class MainViewModel : ViewModelBase
         private set
         {
             _scene = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public DetailLevel? Vegetation
+    {
+        get => _vegetation;
+        private set
+        {
+            _vegetation = value;
             OnPropertyChanged();
         }
     }
@@ -111,6 +123,8 @@ public sealed class MainViewModel : ViewModelBase
     public void NewScene()
     {
         Scene = null;
+        Vegetation = null;
+
         SceneTitle = "Пустая сцена";
         StatusText = "Создана пустая сцена.";
     }
@@ -133,7 +147,7 @@ public sealed class MainViewModel : ViewModelBase
         string levelName = SelectedSource;
 
         StatusText =
-            $"Импорт {levelName}: создание рабочей папки...";
+            $"Импорт {levelName}: обработка геометрии и растительности...";
 
         try
         {
@@ -148,9 +162,10 @@ public sealed class MainViewModel : ViewModelBase
 
             StatusText =
                 $"Импортировано: {result.FileCount} файлов. " +
-                $"Мешей: {result.VisualMeshes:N0}, " +
-                $"треугольников: {result.VisualTriangles:N0}. " +
-                $"Папка: {result.DirectoryPath}";
+                $"Мешей: {result.VisualMeshes:N0}. " +
+                $"Растительность: {result.DetailModels:N0} моделей, " +
+                $"{result.DetailCells:N0} ячеек, " +
+                $"{result.DetailLayers:N0} непустых слоёв.";
         }
         catch (Exception exception) when (
             exception is IOException or
@@ -185,24 +200,51 @@ public sealed class MainViewModel : ViewModelBase
         {
             string path = LevelPaths.OpenPath(levelName);
 
-            RenderLevel level = await Task.Run(
-                () => _reader.Read(path));
+            var loaded = await Task.Run(() =>
+            {
+                RenderLevel level = _reader.Read(path);
 
-            Scene = level;
-            SceneTitle = level.Name;
+                DetailLevel? vegetation = null;
 
-            long triangles = level.Surfaces.Sum(
+                if (Directory.Exists(path))
+                {
+                    string detailsPath = Path.Combine(
+                        path,
+                        "vegetation",
+                        "details.zdetail");
+
+                    if (File.Exists(detailsPath))
+                    {
+                        vegetation = _detailReader.Read(detailsPath);
+                    }
+                }
+
+                return (Level: level, Vegetation: vegetation);
+            });
+
+            Scene = loaded.Level;
+            Vegetation = loaded.Vegetation;
+
+            SceneTitle = loaded.Level.Name;
+
+            long triangles = loaded.Level.Surfaces.Sum(
                 surface => (long)surface.IndexCount / 3);
 
             string sourceType = Directory.Exists(path)
                 ? "рабочая папка"
                 : "архив";
 
+            string vegetationStatus = Vegetation is null
+                ? "Растительность: не импортирована."
+                : $"Растительность: {Vegetation.Models.Length:N0} моделей, " +
+                  $"{Vegetation.Cells.Length:N0} ячеек, " +
+                  $"{Vegetation.ActiveLayers:N0} непустых слоёв.";
+
             StatusText =
-                $"Открыто: {level.Name} ({sourceType}). " +
-                $"Мешей: {level.Surfaces.Length:N0}, " +
-                $"треугольников: {triangles:N0}, " +
-                $"материалов: {level.Materials.Length:N0}.";
+                $"Открыто: {loaded.Level.Name} ({sourceType}). " +
+                $"Мешей: {loaded.Level.Surfaces.Length:N0}, " +
+                $"треугольников: {triangles:N0}. " +
+                vegetationStatus;
         }
         catch (Exception exception) when (
             exception is IOException or

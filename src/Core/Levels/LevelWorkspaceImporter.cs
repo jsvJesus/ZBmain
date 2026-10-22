@@ -11,13 +11,17 @@ public sealed record LevelWorkspaceImportResult(
     uint CollisionTriangles,
     int VisualMeshes,
     long VisualTriangles,
-    string VisualStatus);
+    string VisualStatus,
+    int DetailModels = 0,
+    int DetailCells = 0,
+    long DetailLayers = 0);
 
 public sealed class LevelWorkspaceImporter
 {
     private readonly XRayGeometryConverter _geometry = new();
     private readonly XRayFastPathConverter _fastPath = new();
     private readonly XRayLodConverter _lods = new();
+    private readonly XRayDetailConverter _details = new();
 
     private static readonly string[] EditableDirectories =
     [
@@ -59,6 +63,7 @@ public sealed class LevelWorkspaceImporter
         string? geom = FindSourceFile(files, "level.geom");
         string? geomx = FindSourceFile(files, "level.geomx");
         string? cform = FindSourceFile(files, "level.cform");
+        string? details = FindSourceFile(files, "level.details");
 
         if (level is null || geom is null)
         {
@@ -100,11 +105,17 @@ public sealed class LevelWorkspaceImporter
 
                 File.Copy(file, target);
 
-                string mode = Path.GetFileName(file).Equals(
-                    "level.cform",
-                    StringComparison.OrdinalIgnoreCase)
-                    ? "converted+preserved"
-                    : "preserved";
+                string filename = Path.GetFileName(file);
+
+                string mode =
+                    filename.Equals(
+                        "level.cform",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    filename.Equals(
+                        "level.details",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? "converted+preserved"
+                        : "preserved";
 
                 records.Add(new LevelFileRecord(
                     relative.Replace('\\', '/'),
@@ -177,6 +188,22 @@ public sealed class LevelWorkspaceImporter
                     output);
             }
 
+            DetailConversionResult? detailResult = null;
+
+            if (details is not null)
+            {
+                string detailPath = Path.Combine(
+                    staging,
+                    "vegetation",
+                    "details.zdetail");
+
+                using Stream output = File.Create(detailPath);
+
+                detailResult = _details.Convert(
+                    details,
+                    output);
+            }
+
             string visualStatus = fastPathResult is null
                 ? "geometry+lod"
                 : "geometry+fastpath+lod";
@@ -221,7 +248,10 @@ public sealed class LevelWorkspaceImporter
                 collisionTriangles,
                 geometryResult.Meshes + lodCount,
                 geometryResult.Triangles + lodCount * 16L,
-                visualStatus);
+                visualStatus,
+                detailResult?.Models ?? 0,
+                detailResult?.Cells ?? 0,
+                detailResult?.ActiveLayers ?? 0);
         }
         finally
         {
@@ -236,12 +266,17 @@ public sealed class LevelWorkspaceImporter
         string directory)
     {
         Directory.CreateDirectory(directory);
-        Directory.CreateDirectory(Path.Combine(directory, "source"));
-        Directory.CreateDirectory(Path.Combine(directory, "geometry"));
+
+        Directory.CreateDirectory(
+            Path.Combine(directory, "source"));
+
+        Directory.CreateDirectory(
+            Path.Combine(directory, "geometry"));
 
         foreach (string name in EditableDirectories)
         {
-            Directory.CreateDirectory(Path.Combine(directory, name));
+            Directory.CreateDirectory(
+                Path.Combine(directory, name));
         }
     }
 
@@ -273,11 +308,21 @@ public sealed class LevelWorkspaceImporter
                     source,
                     file);
 
-                string destination = Path.Combine(
+                if (name.Equals(
+                        "vegetation",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    relative.Equals(
+                        "details.zdetail",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string targetFile = Path.Combine(
                     target,
                     relative);
 
-                string? parent = Path.GetDirectoryName(destination);
+                string? parent = Path.GetDirectoryName(targetFile);
 
                 if (parent is not null)
                 {
@@ -286,7 +331,7 @@ public sealed class LevelWorkspaceImporter
 
                 File.Copy(
                     file,
-                    destination,
+                    targetFile,
                     overwrite: true);
             }
         }
@@ -329,8 +374,6 @@ public sealed class LevelWorkspaceImporter
             }
             catch (IOException)
             {
-                // Новая версия готова. Резервную копию
-                // можно удалить позднее вручную.
             }
             catch (UnauthorizedAccessException)
             {
