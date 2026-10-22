@@ -14,6 +14,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
     private const int VertexStride = 5 * sizeof(float);
     private const int MaxTextureUploadsPerFrame = 2;
     private const float MouseSensitivity = 0.003f;
+    private int _alphaCutoffLocation;
 
     private GL? _gl;
 
@@ -250,6 +251,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
             uniform int uHasTexture;
             uniform int uGrid;
             uniform vec3 uTint;
+            uniform float uAlphaCutoff;
 
             out vec4 outputColor;
 
@@ -268,7 +270,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
                     baseColor = texture(uTexture, vUv);
                 }
 
-                if (baseColor.a < 0.45)
+                if (uAlphaCutoff > 0.0 && baseColor.a < uAlphaCutoff)
                 {
                     discard;
                 }
@@ -348,6 +350,10 @@ public sealed unsafe class SceneView : OpenGlControlBase
         _gridLocation = _gl.GetUniformLocation(
             _program,
             "uGrid");
+
+        _alphaCutoffLocation = _gl.GetUniformLocation(
+            _program,
+            "uAlphaCutoff");
 
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -608,6 +614,28 @@ public sealed unsafe class SceneView : OpenGlControlBase
                       materialId < _scene!.Materials.Length
             ? _scene.Materials[materialId]
             : string.Empty;
+
+        XRayMaterialReference reference =
+            XRayMaterialReference.Parse(name);
+
+        string shader = reference.Shader;
+
+        bool alphaTest =
+            shader.Contains(
+                "aref",
+                StringComparison.OrdinalIgnoreCase) ||
+            shader.StartsWith(
+                "flora\\leaf",
+                StringComparison.OrdinalIgnoreCase) ||
+            shader.StartsWith(
+                "details\\lod",
+                StringComparison.OrdinalIgnoreCase);
+
+        float alphaCutoff = alphaTest ? 0.45f : 0f;
+
+        gl.Uniform1(
+            _alphaCutoffLocation,
+            alphaCutoff);
 
         uint texture;
 
