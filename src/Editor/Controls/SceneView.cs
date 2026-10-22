@@ -804,13 +804,21 @@ public sealed unsafe class SceneView : OpenGlControlBase
             AddGridVertex(vertices, 100, 0, i * 5);
         }
 
+        float[] data = vertices.ToArray();
+
+        if (data.Length % 7 != 0)
+        {
+            throw new InvalidOperationException(
+                "Неверный формат вершин сетки.");
+        }
+
         _gridBuffer = gl.GenBuffer();
+
+        gl.BindVertexArray(_vao);
 
         gl.BindBuffer(
             BufferTargetARB.ArrayBuffer,
             _gridBuffer);
-
-        float[] data = vertices.ToArray();
 
         fixed (float* pointer = data)
         {
@@ -820,6 +828,10 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 pointer,
                 BufferUsageARB.StaticDraw);
         }
+
+        gl.BindBuffer(
+            BufferTargetARB.ArrayBuffer,
+            0);
     }
 
     private static void AddGridVertex(
@@ -831,19 +843,33 @@ public sealed unsafe class SceneView : OpenGlControlBase
         data.Add(x);
         data.Add(y);
         data.Add(z);
-        data.Add(0);
-        data.Add(0);
+
+        data.Add(0f);
+        data.Add(0f);
+
+        data.Add(0f);
+        data.Add(0f);
     }
 
     private void DrawGrid()
     {
         GL gl = _gl!;
 
+        if (_gridBuffer == 0 || _program == 0)
+        {
+            return;
+        }
+
+        gl.UseProgram(_program);
         gl.BindVertexArray(_vao);
 
         gl.BindBuffer(
             BufferTargetARB.ArrayBuffer,
             _gridBuffer);
+
+        gl.EnableVertexAttribArray(0);
+        gl.EnableVertexAttribArray(1);
+        gl.EnableVertexAttribArray(2);
 
         gl.VertexAttribPointer(
             0,
@@ -860,6 +886,14 @@ public sealed unsafe class SceneView : OpenGlControlBase
             false,
             VertexStride,
             (void*)(3 * sizeof(float)));
+
+        gl.VertexAttribPointer(
+            2,
+            2,
+            VertexAttribPointerType.Float,
+            false,
+            VertexStride,
+            (void*)(5 * sizeof(float)));
 
         Matrix4x4 identity = Matrix4x4.Identity;
 
@@ -881,9 +915,10 @@ public sealed unsafe class SceneView : OpenGlControlBase
         gl.DrawArrays(
             PrimitiveType.Lines,
             0,
-            41 * 4);
+            164);
 
         gl.Uniform1(_gridLocation, 0);
+
         gl.BindVertexArray(0);
     }
 
