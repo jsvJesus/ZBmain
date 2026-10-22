@@ -212,6 +212,13 @@ public sealed partial class MainWindow : Window
         object? sender,
         KeyEventArgs e)
     {
+        if (e.Key == Key.Home)
+        {
+            SceneView.ShowMapTopDown();
+            e.Handled = true;
+            return;
+        }
+
         if (!IsMovementKey(e.Key))
         {
             return;

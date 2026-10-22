@@ -11,7 +11,7 @@ namespace Editor.Controls;
 
 public sealed unsafe class SceneView : OpenGlControlBase
 {
-    private const int VertexStride = 5 * sizeof(float);
+    private const int VertexStride = 7 * sizeof(float);
     private const int MaxTextureUploadsPerFrame = 2;
     private const float MouseSensitivity = 0.003f;
     private int _alphaCutoffLocation;
@@ -225,11 +225,13 @@ public sealed unsafe class SceneView : OpenGlControlBase
         string vertexShaderSource = shaderHeader + """
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec2 aUv;
+            layout(location = 2) in vec2 aLightmapUv;
 
             uniform mat4 uViewProjection;
             uniform mat4 uModel;
 
             out vec2 vUv;
+            out vec2 vLightmapUv;
             out vec3 vWorldPosition;
 
             void main()
@@ -237,7 +239,9 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 vec4 world = uModel * vec4(aPosition, 1.0);
 
                 vWorldPosition = world.xyz;
-                vUv = vec2(aUv.x, 1.0 - aUv.y);
+
+                vUv = aUv;
+                vLightmapUv = aLightmapUv;
 
                 gl_Position = uViewProjection * world;
             }
@@ -245,6 +249,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         string fragmentShaderSource = shaderHeader + """
             in vec2 vUv;
+            in vec2 vLightmapUv;
             in vec3 vWorldPosition;
 
             uniform sampler2D uTexture;
@@ -360,6 +365,7 @@ public sealed unsafe class SceneView : OpenGlControlBase
 
         _gl.EnableVertexAttribArray(0);
         _gl.EnableVertexAttribArray(1);
+        _gl.EnableVertexAttribArray(2);
 
         _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Lequal);
@@ -475,6 +481,14 @@ public sealed unsafe class SceneView : OpenGlControlBase
                 VertexStride,
                 (void*)(vertexOffset + 3 * sizeof(float)));
 
+            gl.VertexAttribPointer(
+                2,
+                2,
+                VertexAttribPointerType.Float,
+                false,
+                VertexStride,
+                (void*)(vertexOffset + 5 * sizeof(float)));
+
             if (i == 0 || surface.Transform != previousModel)
             {
                 Matrix4x4 model = surface.Transform;
@@ -511,6 +525,29 @@ public sealed unsafe class SceneView : OpenGlControlBase
         {
             RequestNextFrameRendering();
         }
+    }
+
+    public void ShowMapTopDown()
+    {
+        Vector3 center = _scene is null
+            ? Vector3.Zero
+            : (_scene.Min + _scene.Max) * 0.5f;
+
+        float height = MathF.Max(
+            100f,
+            _radius * 2.5f);
+
+        _yaw = 0f;
+        _pitch = -1.55f;
+
+        float offsetZ = height / MathF.Tan(1.55f);
+
+        _cameraPosition = center + new Vector3(
+            0f,
+            height,
+            offsetZ);
+
+        RequestNextFrameRendering();
     }
 
     private uint CompileShader(

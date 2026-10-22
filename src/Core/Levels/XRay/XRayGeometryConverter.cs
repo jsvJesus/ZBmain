@@ -13,7 +13,8 @@ public sealed class XRayGeometryConverter
 {
     private readonly record struct VertexBuffer(
         Vector3[] Positions,
-        Vector2[] Uvs);
+        Vector2[] Uvs,
+        Vector2[] LightmapUvs);
 
     private readonly record struct Surface(
         int Material,
@@ -150,166 +151,20 @@ public sealed class XRayGeometryConverter
 
     private static VertexBuffer[] ReadVertices(byte[] bytes)
     {
-        XRayChunk chunk = XRayChunkReader.Required(
-            bytes,
-            0,
-            bytes.Length,
-            9);
+        XRayVertexBuffer[] buffers =
+            XRayVertexBufferReader.Read(bytes);
 
-        int position = chunk.Offset;
-        int end = chunk.Offset + chunk.Size;
+        var result = new VertexBuffer[buffers.Length];
 
-        int count = checked((int)XRayChunkReader.UInt32(
-            bytes,
-            position));
-
-        position += 4;
-
-        if (count > 512)
+        for (int i = 0; i < buffers.Length; i++)
         {
-            throw new InvalidDataException(
-                "Неверное количество вершинных буферов.");
+            result[i] = new VertexBuffer(
+                buffers[i].Positions,
+                buffers[i].Uvs,
+                buffers[i].LightmapUvs);
         }
 
-        var buffers = new VertexBuffer[count];
-
-        for (int bufferIndex = 0;
-             bufferIndex < count;
-             bufferIndex++)
-        {
-            int stride = 0;
-            int positionOffset = -1;
-            int uvOffset = -1;
-            int uvType = 0;
-
-            while (true)
-            {
-                if (position + 8 > end)
-                {
-                    throw new InvalidDataException(
-                        "Повреждена декларация вершины.");
-                }
-
-                int stream = XRayChunkReader.UInt16(
-                    bytes,
-                    position);
-
-                int offset = XRayChunkReader.UInt16(
-                    bytes,
-                    position + 2);
-
-                int type = bytes[position + 4];
-                int usage = bytes[position + 6];
-                int usageIndex = bytes[position + 7];
-
-                position += 8;
-
-                if (type == 17)
-                {
-                    break;
-                }
-
-                int size = type switch
-                {
-                    1 => 8,
-                    2 => 12,
-                    3 => 16,
-                    4 => 4,
-                    6 => 4,
-                    7 => 8,
-                    _ => throw new NotSupportedException(
-                        $"D3D vertex type {type} не поддерживается.")
-                };
-
-                if (stream != 0)
-                {
-                    throw new NotSupportedException(
-                        "Несколько потоков вершин пока не поддерживаются.");
-                }
-
-                stride = Math.Max(stride, offset + size);
-
-                if (usage == 0 && type == 2)
-                {
-                    positionOffset = offset;
-                }
-
-                if (usage == 5 && usageIndex == 0)
-                {
-                    uvOffset = offset;
-                    uvType = type;
-                }
-            }
-
-            if (positionOffset < 0 ||
-                stride <= 0 ||
-                stride > 256 ||
-                position + 4 > end)
-            {
-                throw new InvalidDataException(
-                    "Нет позиции вершины или неверный stride.");
-            }
-
-            int vertexCount = checked(
-                (int)XRayChunkReader.UInt32(bytes, position));
-
-            position += 4;
-
-            long next = (long)position +
-                        (long)vertexCount * stride;
-
-            if (vertexCount > 20_000_000 || next > end)
-            {
-                throw new InvalidDataException(
-                    "Повреждён вершинный буфер.");
-            }
-
-            var points = new Vector3[vertexCount];
-            var uvs = new Vector2[vertexCount];
-
-            for (int i = 0; i < vertexCount; i++)
-            {
-                int start = position + i * stride;
-                int p = start + positionOffset;
-
-                points[i] = new Vector3(
-                    XRayChunkReader.Single(bytes, p),
-                    XRayChunkReader.Single(bytes, p + 4),
-                    XRayChunkReader.Single(bytes, p + 8));
-
-                if (uvOffset < 0)
-                {
-                    continue;
-                }
-
-                int t = start + uvOffset;
-
-                uvs[i] = uvType switch
-                {
-                    1 => new Vector2(
-                        XRayChunkReader.Single(bytes, t),
-                        XRayChunkReader.Single(bytes, t + 4)),
-
-                    6 => new Vector2(
-                        (short)XRayChunkReader.UInt16(bytes, t) / 1024f,
-                        (short)XRayChunkReader.UInt16(bytes, t + 2) / 1024f),
-
-                    7 => new Vector2(
-                        (short)XRayChunkReader.UInt16(bytes, t) / 2048f,
-                        (short)XRayChunkReader.UInt16(bytes, t + 2) / 2048f),
-
-                    _ => Vector2.Zero
-                };
-            }
-
-            buffers[bufferIndex] = new VertexBuffer(
-                points,
-                uvs);
-
-            position = checked((int)next);
-        }
-
-        return buffers;
+        return result;
     }
 
     private static ushort[][] ReadIndices(byte[] bytes)
@@ -544,7 +399,9 @@ public sealed class XRayGeometryConverter
             leaveOpen: true);
 
         writer.Write("ZRGM"u8);
-        writer.Write(1);
+
+        writer.Write(2);
+
         writer.Write(materials.Length);
         writer.Write(vertices.Length);
         writer.Write(indices.Length);
@@ -562,13 +419,18 @@ public sealed class XRayGeometryConverter
             for (int i = 0; i < buffer.Positions.Length; i++)
             {
                 Vector3 point = buffer.Positions[i];
-                Vector2 uv = buffer.Uvs[i];
+                Vector2 uv0 = buffer.Uvs[i];
+                Vector2 uv1 = buffer.LightmapUvs[i];
 
                 writer.Write(point.X);
                 writer.Write(point.Y);
                 writer.Write(point.Z);
-                writer.Write(uv.X);
-                writer.Write(uv.Y);
+
+                writer.Write(uv0.X);
+                writer.Write(uv0.Y);
+
+                writer.Write(uv1.X);
+                writer.Write(uv1.Y);
             }
         }
 
@@ -586,9 +448,11 @@ public sealed class XRayGeometryConverter
         {
             writer.Write(surface.Material);
             writer.Write(surface.Type);
+
             writer.Write(surface.VertexBuffer);
             writer.Write(surface.VertexOffset);
             writer.Write(surface.VertexCount);
+
             writer.Write(surface.IndexBuffer);
             writer.Write(surface.IndexOffset);
             writer.Write(surface.IndexCount);
@@ -599,14 +463,17 @@ public sealed class XRayGeometryConverter
             writer.Write(m.M12);
             writer.Write(m.M13);
             writer.Write(m.M14);
+
             writer.Write(m.M21);
             writer.Write(m.M22);
             writer.Write(m.M23);
             writer.Write(m.M24);
+
             writer.Write(m.M31);
             writer.Write(m.M32);
             writer.Write(m.M33);
             writer.Write(m.M34);
+
             writer.Write(m.M41);
             writer.Write(m.M42);
             writer.Write(m.M43);

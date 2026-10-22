@@ -7,7 +7,9 @@ namespace Core.Levels;
 
 public sealed record RenderVertexBuffer(float[] Data)
 {
-    public int Count => Data.Length / 5;
+    public const int FloatsPerVertex = 7;
+
+    public int Count => Data.Length / FloatsPerVertex;
 }
 
 public sealed record RenderIndexBuffer(ushort[] Data);
@@ -36,21 +38,31 @@ public sealed class RenderLevelReader
 {
     public RenderLevel Read(string packagePath)
     {
-        using ZipArchive archive = ZipFile.OpenRead(packagePath);
+        using ZipArchive archive =
+            ZipFile.OpenRead(packagePath);
 
         ZipArchiveEntry entry =
             archive.GetEntry("geometry/render.zgeom") ??
             throw new InvalidDataException(
-                "В уровне нет render.zgeom. Выполните повторный импорт.");
+                "В уровне отсутствует render.zgeom.");
 
         using Stream stream = entry.Open();
-        using var reader = new BinaryReader(stream, Encoding.UTF8);
+        using var reader = new BinaryReader(
+            stream,
+            Encoding.UTF8);
 
-        if (!reader.ReadBytes(4).SequenceEqual("ZRGM"u8) ||
-            reader.ReadInt32() != 1)
+        if (!reader.ReadBytes(4).SequenceEqual("ZRGM"u8))
         {
             throw new InvalidDataException(
-                "Неподдерживаемая версия render.zgeom.");
+                "Неверная сигнатура render.zgeom.");
+        }
+
+        int version = reader.ReadInt32();
+
+        if (version is not (1 or 2))
+        {
+            throw new InvalidDataException(
+                $"Неизвестная версия геометрии: {version}.");
         }
 
         int materialCount = ReadCount(reader, 100_000);
@@ -59,34 +71,66 @@ public sealed class RenderLevelReader
         int surfaceCount = ReadCount(reader, 200_000);
 
         var materials = new string[materialCount];
-        var vertexBuffers = new RenderVertexBuffer[vertexBufferCount];
-        var indexBuffers = new RenderIndexBuffer[indexBufferCount];
+        var vertexBuffers =
+            new RenderVertexBuffer[vertexBufferCount];
+
+        var indexBuffers =
+            new RenderIndexBuffer[indexBufferCount];
+
         var surfaces = new RenderSurface[surfaceCount];
 
-        for (int i = 0; i < materials.Length; i++)
+        for (int i = 0; i < materialCount; i++)
         {
             materials[i] = reader.ReadString();
         }
 
-        for (int i = 0; i < vertexBuffers.Length; i++)
+        for (int i = 0; i < vertexBufferCount; i++)
         {
-            int vertexCount = ReadCount(reader, 20_000_000);
-            var data = new float[checked(vertexCount * 5)];
+            int vertexCount = ReadCount(
+                reader,
+                20_000_000);
 
-            for (int j = 0; j < data.Length; j++)
+            var data = new float[
+                checked(
+                    vertexCount *
+                    RenderVertexBuffer.FloatsPerVertex)];
+
+            for (int vertex = 0;
+                 vertex < vertexCount;
+                 vertex++)
             {
-                data[j] = reader.ReadSingle();
+                int offset =
+                    vertex *
+                    RenderVertexBuffer.FloatsPerVertex;
+
+                data[offset] = reader.ReadSingle();
+                data[offset + 1] = reader.ReadSingle();
+                data[offset + 2] = reader.ReadSingle();
+
+                data[offset + 3] = reader.ReadSingle();
+                data[offset + 4] = reader.ReadSingle();
+
+                if (version >= 2)
+                {
+                    data[offset + 5] = reader.ReadSingle();
+                    data[offset + 6] = reader.ReadSingle();
+                }
+                else
+                {
+                    data[offset + 5] = 0f;
+                    data[offset + 6] = 0f;
+                }
             }
 
             vertexBuffers[i] = new RenderVertexBuffer(data);
         }
 
-        for (int i = 0; i < indexBuffers.Length; i++)
+        for (int i = 0; i < indexBufferCount; i++)
         {
-            int indexCount = ReadCount(reader, 60_000_000);
-            var data = new ushort[indexCount];
+            int count = ReadCount(reader, 60_000_000);
+            var data = new ushort[count];
 
-            for (int j = 0; j < data.Length; j++)
+            for (int j = 0; j < count; j++)
             {
                 data[j] = reader.ReadUInt16();
             }
@@ -94,13 +138,15 @@ public sealed class RenderLevelReader
             indexBuffers[i] = new RenderIndexBuffer(data);
         }
 
-        for (int i = 0; i < surfaces.Length; i++)
+        for (int i = 0; i < surfaceCount; i++)
         {
             int material = reader.ReadInt32();
             int type = reader.ReadInt32();
+
             int vb = reader.ReadInt32();
             int vertexOffset = reader.ReadInt32();
             int vertexCount = reader.ReadInt32();
+
             int ib = reader.ReadInt32();
             int indexOffset = reader.ReadInt32();
             int indexCount = reader.ReadInt32();
@@ -119,7 +165,7 @@ public sealed class RenderLevelReader
                     indexBuffers[ib].Data.Length)
             {
                 throw new InvalidDataException(
-                    $"Повреждена ссылка на геометрию объекта {i}.");
+                    $"Неверные диапазоны меша {i}.");
             }
 
             surfaces[i] = new RenderSurface(
@@ -152,30 +198,44 @@ public sealed class RenderLevelReader
             max);
     }
 
-    private static int ReadCount(BinaryReader reader, int max)
+    private static int ReadCount(
+        BinaryReader reader,
+        int maximum)
     {
         int count = reader.ReadInt32();
 
-        if (count < 0 || count > max)
+        if (count < 0 || count > maximum)
         {
             throw new InvalidDataException(
-                $"Некорректное количество элементов: {count}.");
+                $"Недопустимое количество элементов: {count}.");
         }
 
         return count;
     }
 
-    private static Matrix4x4 ReadMatrix(BinaryReader reader)
+    private static Matrix4x4 ReadMatrix(
+        BinaryReader reader)
     {
         return new Matrix4x4(
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle(),
-            reader.ReadSingle(), reader.ReadSingle());
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle());
     }
 
     private static (Vector3 Min, Vector3 Max) ReadBounds(
@@ -186,7 +246,9 @@ public sealed class RenderLevelReader
 
         if (collision is null)
         {
-            return (new Vector3(-500), new Vector3(500));
+            return (
+                new Vector3(-500),
+                new Vector3(500));
         }
 
         using Stream stream = collision.Open();
@@ -195,7 +257,9 @@ public sealed class RenderLevelReader
         if (!reader.ReadBytes(4).SequenceEqual("ZMSH"u8) ||
             reader.ReadUInt32() != 1)
         {
-            return (new Vector3(-500), new Vector3(500));
+            return (
+                new Vector3(-500),
+                new Vector3(500));
         }
 
         reader.ReadUInt32();
