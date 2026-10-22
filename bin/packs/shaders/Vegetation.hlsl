@@ -1,117 +1,145 @@
-
 cbuffer FrameData : register(b0)
 {
+    row_major float4x4 ViewProjection;
     float4 Frame;
 };
 
 struct VertexInput
 {
+    float3 Position : POSITION;
+    float2 Uv : TEXCOORD0;
+
     float4 PositionScale : INSTANCE;
-    float4 TintPhase : TINT;
-    uint VertexId : SV_VertexID;
+    float4 TintRotation : TINT;
 };
 
 struct PixelInput
 {
     float4 Position : SV_POSITION;
-    float3 Color : COLOR0;
-    float Height : TEXCOORD0;
-    float Edge : TEXCOORD1;
+    float3 WorldPosition : TEXCOORD1;
+    float2 Uv : TEXCOORD0;
+    float3 Tint : COLOR0;
+    float Height : TEXCOORD2;
 };
 
 PixelInput VSMain(VertexInput input)
 {
     PixelInput output;
 
-    uint localVertex = input.VertexId % 6;
-    uint blade = input.VertexId / 6;
+    float angle = input.TintRotation.w;
 
-    float side = 1.0;
+    float sine;
+    float cosine;
 
-    if (localVertex == 0 || localVertex == 3)
-    {
-        side = -1.0;
-    }
-    else if (localVertex == 1)
-    {
-        side = -0.45;
-    }
-    else if (localVertex == 2 || localVertex == 4)
-    {
-        side = 0.45;
-    }
+    sincos(angle, sine, cosine);
 
-    float height = 0.0;
+    float3 localPosition = input.Position;
 
-    if (localVertex == 1 ||
-        localVertex == 2 ||
-        localVertex == 4)
-    {
-        height = 1.0;
-    }
+    float3 rotatedPosition = float3(
+        localPosition.x * cosine -
+        localPosition.z * sine,
+        localPosition.y,
+        localPosition.x * sine +
+        localPosition.z * cosine);
 
-    float3 world = input.PositionScale.xyz;
-    float size = input.PositionScale.w;
+    float scale = input.PositionScale.w;
 
-    float2 bladeDirection =
-        blade == 0
-            ? float2(1.0, 0.0)
-            : float2(0.55, 0.83);
+    float3 worldPosition =
+        input.PositionScale.xyz +
+        rotatedPosition * scale;
 
-    float2 origin = float2(
-        world.x * 0.76 + world.z * 0.24,
-        world.z * 0.29 - world.x * 0.08 - world.y * 0.18);
+    float heightFactor = saturate(
+        localPosition.y / 1.5f);
+
+    heightFactor *= heightFactor;
+
+    float time = Frame.x;
+
+    float phase =
+        input.PositionScale.x * 0.13f +
+        input.PositionScale.z * 0.17f +
+        angle;
 
     float wind = sin(
-        Frame.x * 1.7 +
-        input.TintPhase.w +
-        world.x * 12.0 +
-        world.z * 8.0);
+        time * 1.8f + phase);
 
     float gust = sin(
-        Frame.x * 0.56 +
-        world.x * 5.0 +
-        world.z * 4.0);
+        time * 0.7f +
+        input.PositionScale.x * 0.04f +
+        input.PositionScale.z * 0.06f);
 
-    float bend = (wind * 0.65 + gust * 0.35) *
-                 height * height *
-                 size * 0.68;
+    float displacement =
+        (wind * 0.7f + gust * 0.3f) *
+        heightFactor *
+        scale *
+        0.12f;
 
-    float2 offset = bladeDirection * side * size;
+    worldPosition.x += displacement;
+    worldPosition.z += displacement * 0.55f;
 
-    offset.x += bend;
-    offset.y += height * size * 3.3;
+    output.Position = mul(
+        float4(worldPosition, 1.0f),
+        ViewProjection);
 
-    float2 position = origin + offset;
-
-    output.Position = float4(
-        position,
-        saturate(0.5 + world.z * 0.12),
-        1.0);
-
-    output.Color = input.TintPhase.rgb;
-    output.Height = height;
-    output.Edge = abs(side);
+    output.WorldPosition = worldPosition;
+    output.Uv = input.Uv;
+    output.Tint = input.TintRotation.rgb;
+    output.Height = heightFactor;
 
     return output;
 }
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    float3 rootColor = input.Color * 0.43;
-    float3 tipColor = input.Color * 1.22;
+    float3 dx = ddx(input.WorldPosition);
+    float3 dy = ddy(input.WorldPosition);
 
-    float lighting = lerp(
-        0.8,
-        1.08,
-        saturate(input.Height));
+    float3 normal = cross(dx, dy);
 
-    float3 color = lerp(
-        rootColor,
-        tipColor,
-        saturate(input.Height));
+    float normalLength = length(normal);
 
-    color *= lighting;
+    if (normalLength > 0.00001f)
+    {
+        normal /= normalLength;
+    }
+    else
+    {
+        normal = float3(0.0f, 1.0f, 0.0f);
+    }
 
-    return float4(saturate(color), 1.0);
+    float3 lightDirection = normalize(
+        float3(0.4f, 0.82f, 0.35f));
+
+    float diffuse = abs(dot(
+        normal,
+        lightDirection));
+
+    float lighting =
+        0.48f +
+        diffuse * 0.44f;
+
+    float3 baseColor = float3(
+        0.32f,
+        0.40f,
+        0.25f);
+
+    float uvVariation = saturate(
+        input.Uv.y) * 0.06f;
+
+    baseColor += uvVariation;
+
+    float heightLighting = lerp(
+        0.90f,
+        1.04f,
+        input.Height);
+
+    float3 finalColor =
+        baseColor *
+        input.Tint *
+        lighting *
+        heightLighting;
+
+    return float4(
+        saturate(finalColor),
+        1.0f);
 }

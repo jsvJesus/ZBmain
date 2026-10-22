@@ -1,79 +1,81 @@
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Core.Levels;
 
 namespace Editor.Rendering.Direct3D11;
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct VegetationInstance(
     Vector4 PositionScale,
-    Vector4 TintPhase);
+    Vector4 TintRotation);
+
+internal readonly record struct VegetationBatch(
+    int ModelIndex,
+    VegetationInstance[] Instances);
+
+internal sealed record VegetationBuildResult(
+    Vector3 Center,
+    VegetationBatch[] Batches,
+    int InstanceCount);
 
 internal static class VegetationInstanceBuilder
 {
     private const int MaximumInstances = 45_000;
     private const float ViewRadius = 120f;
+    private const int SamplesPerAxis = 3;
+    private const float CellHalfSize = 1f;
 
-    public static VegetationInstance[] Build(
-        DetailLevel details)
+    public static VegetationBuildResult Build(DetailLevel details)
     {
         if (details.Models.Length == 0 ||
             details.Cells.Length == 0)
         {
-            return [];
+            return Empty();
         }
 
-        float minX = float.PositiveInfinity;
-        float maxX = float.NegativeInfinity;
-        float minZ = float.PositiveInfinity;
-        float maxZ = float.NegativeInfinity;
+        Vector2 center = FindCenter(details);
 
-        float minY = float.PositiveInfinity;
-        float maxY = float.NegativeInfinity;
-
-        foreach (DetailCell cell in details.Cells)
-        {
-            if (!HasVegetation(cell))
-            {
-                continue;
-            }
-
-            minX = MathF.Min(minX, cell.Position.X);
-            maxX = MathF.Max(maxX, cell.Position.X);
-
-            minZ = MathF.Min(minZ, cell.Position.Y);
-            maxZ = MathF.Max(maxZ, cell.Position.Y);
-
-            if (float.IsFinite(cell.TopHeight))
-            {
-                minY = MathF.Min(minY, cell.TopHeight);
-                maxY = MathF.Max(maxY, cell.TopHeight);
-            }
-        }
-
-        if (!float.IsFinite(minX) ||
-            !float.IsFinite(minY))
-        {
-            return [];
-        }
-
-        float centerX = (minX + maxX) * 0.5f;
-        float centerZ = (minZ + maxZ) * 0.5f;
-        float centerY = (minY + maxY) * 0.5f;
-
-        var instances = new List<VegetationInstance>(
+        var selected = new List<SelectedInstance>(
             MaximumInstances);
 
         var random = new Random(41091);
 
         int generated = 0;
 
+        float minimumY = float.PositiveInfinity;
+        float maximumY = float.NegativeInfinity;
+
         foreach (DetailCell cell in details.Cells)
         {
-            if (MathF.Abs(cell.Position.X - centerX) > ViewRadius ||
-                MathF.Abs(cell.Position.Y - centerZ) > ViewRadius ||
-                !float.IsFinite(cell.TopHeight))
+            if (!float.IsFinite(cell.TopHeight) ||
+                !float.IsFinite(cell.Position.X) ||
+                !float.IsFinite(cell.Position.Y))
             {
                 continue;
             }
+
+            float distanceX = cell.Position.X - center.X;
+            float distanceZ = cell.Position.Y - center.Y;
+
+            if (distanceX * distanceX +
+                distanceZ * distanceZ >
+                ViewRadius * ViewRadius)
+            {
+                continue;
+            }
+
+            if (!HasVegetation(cell))
+            {
+                continue;
+            }
+
+            minimumY = MathF.Min(
+                minimumY,
+                cell.TopHeight);
+
+            maximumY = MathF.Max(
+                maximumY,
+                cell.TopHeight);
 
             AddLayer(cell, cell.Layer0);
             AddLayer(cell, cell.Layer1);
@@ -81,7 +83,42 @@ internal static class VegetationInstanceBuilder
             AddLayer(cell, cell.Layer3);
         }
 
-        return instances.ToArray();
+        var groups = new List<VegetationInstance>[
+            details.Models.Length
+        ];
+
+        for (int i = 0; i < groups.Length; i++)
+        {
+            groups[i] = new List<VegetationInstance>();
+        }
+
+        foreach (SelectedInstance item in selected)
+        {
+            groups[item.ModelIndex].Add(item.Instance);
+        }
+
+        var batches = new List<VegetationBatch>();
+
+        for (int i = 0; i < groups.Length; i++)
+        {
+            if (groups[i].Count == 0)
+            {
+                continue;
+            }
+
+            batches.Add(new VegetationBatch(
+                i,
+                groups[i].ToArray()));
+        }
+
+        float centerY = float.IsFinite(minimumY)
+            ? (minimumY + maximumY) * 0.5f
+            : 0f;
+
+        return new VegetationBuildResult(
+            new Vector3(center.X, centerY, center.Y),
+            batches.ToArray(),
+            selected.Count);
 
         void AddLayer(
             DetailCell cell,
@@ -94,95 +131,168 @@ internal static class VegetationInstanceBuilder
                 return;
             }
 
-            int density =
-                (layer.Density & 0xF) +
-                ((layer.Density >> 4) & 0xF) +
-                ((layer.Density >> 8) & 0xF) +
-                ((layer.Density >> 12) & 0xF);
+            DetailModel model = details.Models[layer.Model];
 
-            if (density <= 0)
+            if (model.Vertices.Length == 0 ||
+                model.Indices.Length < 3)
             {
                 return;
             }
 
-            int count = 1 + density / 25;
+            float minimumScale = MathF.Min(
+                model.MinScale,
+                model.MaxScale);
 
-            DetailModel model = details.Models[layer.Model];
+            float maximumScale = MathF.Max(
+                model.MinScale,
+                model.MaxScale);
 
-            float minScale = MathF.Max(
-                0.1f,
-                MathF.Min(model.MinScale, model.MaxScale));
-
-            float maxScale = MathF.Max(
-                minScale,
-                MathF.Max(model.MinScale, model.MaxScale));
-
-            for (int i = 0; i < count; i++)
+            if (!float.IsFinite(minimumScale) ||
+                !float.IsFinite(maximumScale) ||
+                maximumScale <= 0f)
             {
-                float jitterX =
-                    (random.NextSingle() - 0.5f) * 2f;
+                return;
+            }
 
-                float jitterZ =
-                    (random.NextSingle() - 0.5f) * 2f;
+            minimumScale = MathF.Max(
+                0.01f,
+                minimumScale);
 
-                float x =
-                    (cell.Position.X + jitterX - centerX) /
-                    ViewRadius;
+            maximumScale = MathF.Max(
+                minimumScale,
+                maximumScale);
 
-                float z =
-                    (cell.Position.Y + jitterZ - centerZ) /
-                    ViewRadius;
-
-                float y = Math.Clamp(
-                    (cell.TopHeight - centerY) / 80f,
-                    -1f,
-                    1f);
-
-                float scaleFactor =
-                    minScale +
-                    (maxScale - minScale) *
-                    random.NextSingle();
-
-                float size =
-                    (0.012f + random.NextSingle() * 0.01f) *
-                    scaleFactor;
-
-                float variation = random.NextSingle();
-
-                Vector3 tint = (layer.Model % 4) switch
+            for (int z = 0; z < SamplesPerAxis; z++)
+            {
+                for (int x = 0; x < SamplesPerAxis; x++)
                 {
-                    0 => new Vector3(0.28f, 0.67f, 0.22f),
-                    1 => new Vector3(0.40f, 0.64f, 0.20f),
-                    2 => new Vector3(0.31f, 0.55f, 0.18f),
-                    _ => new Vector3(0.46f, 0.64f, 0.27f)
-                };
+                    float u = (x + random.NextSingle()) /
+                              SamplesPerAxis;
 
-                tint *= 0.8f + variation * 0.35f;
+                    float v = (z + random.NextSingle()) /
+                              SamplesPerAxis;
 
-                var instance = new VegetationInstance(
-                    new Vector4(x, y, z, size),
-                    new Vector4(
-                        tint,
-                        random.NextSingle() * MathF.Tau));
+                    float density = SampleDensity(
+                        layer.Density,
+                        u,
+                        v);
 
-                generated++;
+                    if (random.NextSingle() > density)
+                    {
+                        continue;
+                    }
 
-                if (instances.Count < MaximumInstances)
-                {
-                    instances.Add(instance);
-                    continue;
-                }
+                    float worldX = cell.Position.X +
+                        (u * 2f - 1f) * CellHalfSize;
 
-                // Резервуарная выборка: не заполняем
-                // лимит экземплярами только из первых строк карты.
-                int index = random.Next(generated);
+                    float worldZ = cell.Position.Y +
+                        (v * 2f - 1f) * CellHalfSize;
 
-                if (index < MaximumInstances)
-                {
-                    instances[index] = instance;
+                    float scale = minimumScale +
+                        (maximumScale - minimumScale) *
+                        random.NextSingle();
+
+                    float rotation = random.NextSingle() *
+                        MathF.Tau;
+
+                    float variation = 0.82f +
+                        random.NextSingle() * 0.28f;
+
+                    var instance = new VegetationInstance(
+                        new Vector4(
+                            worldX,
+                            cell.TopHeight,
+                            worldZ,
+                            scale),
+                        new Vector4(
+                            variation,
+                            variation * 0.95f,
+                            variation * 0.84f,
+                            rotation));
+
+                    generated++;
+
+                    var item = new SelectedInstance(
+                        layer.Model,
+                        instance);
+
+                    if (selected.Count < MaximumInstances)
+                    {
+                        selected.Add(item);
+                        continue;
+                    }
+
+                    int replacement = random.Next(generated);
+
+                    if (replacement < MaximumInstances)
+                    {
+                        selected[replacement] = item;
+                    }
                 }
             }
         }
+    }
+
+    private static float SampleDensity(
+        ushort density,
+        float u,
+        float v)
+    {
+        float d00 = (density & 0xF) / 15f;
+        float d10 = ((density >> 4) & 0xF) / 15f;
+        float d01 = ((density >> 8) & 0xF) / 15f;
+        float d11 = ((density >> 12) & 0xF) / 15f;
+
+        float bottom = MathF.Lerp(d00, d10, u);
+        float top = MathF.Lerp(d01, d11, u);
+
+        return Math.Clamp(
+            MathF.Lerp(bottom, top, v),
+            0f,
+            1f);
+    }
+
+    private static Vector2 FindCenter(DetailLevel details)
+    {
+        float minimumX = float.PositiveInfinity;
+        float maximumX = float.NegativeInfinity;
+        float minimumZ = float.PositiveInfinity;
+        float maximumZ = float.NegativeInfinity;
+
+        foreach (DetailCell cell in details.Cells)
+        {
+            if (!HasVegetation(cell) ||
+                !float.IsFinite(cell.Position.X) ||
+                !float.IsFinite(cell.Position.Y))
+            {
+                continue;
+            }
+
+            minimumX = MathF.Min(
+                minimumX,
+                cell.Position.X);
+
+            maximumX = MathF.Max(
+                maximumX,
+                cell.Position.X);
+
+            minimumZ = MathF.Min(
+                minimumZ,
+                cell.Position.Y);
+
+            maximumZ = MathF.Max(
+                maximumZ,
+                cell.Position.Y);
+        }
+
+        if (!float.IsFinite(minimumX))
+        {
+            return Vector2.Zero;
+        }
+
+        return new Vector2(
+            (minimumX + maximumX) * 0.5f,
+            (minimumZ + maximumZ) * 0.5f);
     }
 
     private static bool HasVegetation(DetailCell cell)
@@ -198,4 +308,16 @@ internal static class VegetationInstanceBuilder
         return layer.Model != byte.MaxValue &&
                layer.Density != 0;
     }
+
+    private static VegetationBuildResult Empty()
+    {
+        return new VegetationBuildResult(
+            Vector3.Zero,
+            [],
+            0);
+    }
+
+    private readonly record struct SelectedInstance(
+        int ModelIndex,
+        VegetationInstance Instance);
 }

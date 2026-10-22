@@ -18,19 +18,24 @@ internal sealed class VegetationPreviewRenderer : IDisposable
 {
     private readonly Stopwatch _clock = new();
 
+    private readonly List<VegetationGpuMesh> _meshes = new();
+
     private IDXGIFactory2? _factory;
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
     private IDXGISwapChain1? _swapChain;
 
     private ID3D11RenderTargetView? _renderTarget;
+    private ID3D11Texture2D? _depthTexture;
+    private ID3D11DepthStencilView? _depthView;
+
     private ID3D11VertexShader? _vertexShader;
     private ID3D11PixelShader? _pixelShader;
-
     private ID3D11InputLayout? _inputLayout;
     private ID3D11RasterizerState? _rasterizer;
-    private ID3D11Buffer? _instanceBuffer;
     private ID3D11Buffer? _frameBuffer;
+
+    private Vector3 _sceneCenter;
 
     private int _width;
     private int _height;
@@ -75,7 +80,10 @@ internal sealed class VegetationPreviewRenderer : IDisposable
                     "Видеокарта не поддерживает Direct3D 11.");
             }
 
-            GetSize(windowHandle, out _width, out _height);
+            GetSize(
+                windowHandle,
+                out _width,
+                out _height);
 
             var swapDescription = new SwapChainDescription1
             {
@@ -107,12 +115,12 @@ internal sealed class VegetationPreviewRenderer : IDisposable
                 windowHandle,
                 WindowAssociationFlags.IgnoreAltEnter);
 
-            CreateRenderTarget();
+            CreateRenderTargets();
             CreateShaders();
-            CreateInstances(details);
+            CreateMeshes(details);
 
             _frameBuffer = _device.CreateBuffer(
-                16,
+                (uint)Marshal.SizeOf<FrameConstants>(),
                 BindFlags.ConstantBuffer);
 
             _rasterizer = _device.CreateRasterizerState(
@@ -132,7 +140,8 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         if (_device is null ||
             _context is null ||
             _swapChain is null ||
-            _renderTarget is null)
+            _renderTarget is null ||
+            _depthView is null)
         {
             return;
         }
@@ -142,18 +151,20 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             out int width,
             out int height);
 
-        if (width != _width ||
-            height != _height)
+        if (width != _width || height != _height)
         {
             Resize(width, height);
         }
 
-        if (_renderTarget is null)
+        if (_renderTarget is null ||
+            _depthView is null)
         {
             return;
         }
 
-        _context.OMSetRenderTargets(_renderTarget);
+        _context.OMSetRenderTargets(
+            _renderTarget,
+            _depthView);
 
         _context.RSSetViewport(
             0,
@@ -165,57 +176,73 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             _renderTarget,
             new Color4(
                 0.065f,
+                0.085f,
                 0.105f,
-                0.115f,
                 1f));
 
+        _context.ClearDepthStencilView(
+            _depthView,
+            DepthStencilClearFlags.Depth,
+            1f,
+            0);
+
         if (_instanceCount > 0 &&
-            _instanceBuffer is not null &&
             _frameBuffer is not null &&
             _vertexShader is not null &&
             _pixelShader is not null &&
             _inputLayout is not null &&
             _rasterizer is not null)
         {
-            Vector4 frame = new(
-                (float)_clock.Elapsed.TotalSeconds,
-                0f,
-                0f,
-                0f);
-
-            _context.UpdateSubresource(
-                in frame,
-                _frameBuffer);
-
-            _context.IASetInputLayout(_inputLayout);
-
-            _context.IASetPrimitiveTopology(
-                PrimitiveTopology.TriangleList);
-
-            _context.IASetVertexBuffer(
-                0,
-                _instanceBuffer,
-                32);
-
-            _context.RSSetState(_rasterizer);
-
-            _context.VSSetShader(_vertexShader);
-            _context.PSSetShader(_pixelShader);
-
-            _context.VSSetConstantBuffer(
-                0,
-                _frameBuffer);
-
-            _context.DrawInstanced(
-                12,
-                (uint)_instanceCount,
-                0,
-                0);
+            DrawVegetation();
         }
 
         _swapChain.Present(
             1,
             PresentFlags.None).CheckError();
+    }
+
+    private void DrawVegetation()
+    {
+        ID3D11DeviceContext context = _context!;
+
+        Matrix4x4 viewProjection =
+            VegetationPreviewCamera.CreateViewProjection(
+                _sceneCenter,
+                _width,
+                _height);
+
+        var frame = new FrameConstants
+        {
+            ViewProjection = viewProjection,
+            Frame = new Vector4(
+                (float)_clock.Elapsed.TotalSeconds,
+                0f,
+                0f,
+                0f)
+        };
+
+        context.UpdateSubresource(
+            in frame,
+            _frameBuffer!);
+
+        context.IASetInputLayout(_inputLayout!);
+
+        context.IASetPrimitiveTopology(
+            PrimitiveTopology.TriangleList);
+
+        context.RSSetState(_rasterizer);
+
+        context.VSSetShader(_vertexShader!);
+        context.PSSetShader(_pixelShader!);
+
+        context.VSSetConstantBuffer(
+            0,
+            _frameBuffer);
+
+        foreach (VegetationGpuMesh mesh in _meshes)
+        {
+            mesh.Draw(context);
+        }
     }
 
     private void CreateShaders()
@@ -255,11 +282,29 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         InputElementDescription[] elements =
         [
             new InputElementDescription(
+                "POSITION",
+                0,
+                Format.R32G32B32_Float,
+                0,
+                0,
+                InputClassification.PerVertexData,
+                0),
+
+            new InputElementDescription(
+                "TEXCOORD",
+                0,
+                Format.R32G32_Float,
+                12,
+                0,
+                InputClassification.PerVertexData,
+                0),
+
+            new InputElementDescription(
                 "INSTANCE",
                 0,
                 Format.R32G32B32A32_Float,
                 0,
-                0,
+                1,
                 InputClassification.PerInstanceData,
                 1),
 
@@ -268,7 +313,7 @@ internal sealed class VegetationPreviewRenderer : IDisposable
                 0,
                 Format.R32G32B32A32_Float,
                 16,
-                0,
+                1,
                 InputClassification.PerInstanceData,
                 1)
         ];
@@ -278,27 +323,33 @@ internal sealed class VegetationPreviewRenderer : IDisposable
             vertexBytecode.Span);
     }
 
-    private void CreateInstances(DetailLevel details)
+    private void CreateMeshes(DetailLevel details)
     {
-        VegetationInstance[] instances =
+        VegetationBuildResult result =
             VegetationInstanceBuilder.Build(details);
 
-        _instanceCount = instances.Length;
+        _sceneCenter = result.Center;
+        _instanceCount = 0;
 
-        if (_instanceCount == 0)
+        foreach (VegetationBatch batch in result.Batches)
         {
-            return;
-        }
+            DetailModel model = details.Models[
+                batch.ModelIndex
+            ];
 
-        _instanceBuffer = _device!.CreateBuffer(
-            instances,
-            BindFlags.VertexBuffer);
+            var mesh = new VegetationGpuMesh(
+                _device!,
+                model,
+                batch.Instances);
+
+            _meshes.Add(mesh);
+            _instanceCount += mesh.InstanceCount;
+        }
     }
 
-    private void CreateRenderTarget()
+    private void CreateRenderTargets()
     {
-        if (_device is null ||
-            _swapChain is null)
+        if (_device is null || _swapChain is null)
         {
             return;
         }
@@ -308,6 +359,21 @@ internal sealed class VegetationPreviewRenderer : IDisposable
 
         _renderTarget = _device.CreateRenderTargetView(
             backBuffer);
+
+        _depthTexture = _device.CreateTexture2D(
+            Format.D24_UNorm_S8_UInt,
+            (uint)_width,
+            (uint)_height,
+            1,
+            1,
+            null,
+            BindFlags.DepthStencil);
+
+        _depthView = _device.CreateDepthStencilView(
+            _depthTexture,
+            new DepthStencilViewDescription(
+                _depthTexture,
+                DepthStencilViewDimension.Texture2D));
     }
 
     private void Resize(int width, int height)
@@ -320,8 +386,7 @@ internal sealed class VegetationPreviewRenderer : IDisposable
 
         _context.UnsetRenderTargets();
 
-        _renderTarget?.Dispose();
-        _renderTarget = null;
+        ReleaseRenderTargets();
 
         _context.Flush();
 
@@ -335,7 +400,19 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         _width = width;
         _height = height;
 
-        CreateRenderTarget();
+        CreateRenderTargets();
+    }
+
+    private void ReleaseRenderTargets()
+    {
+        _depthView?.Dispose();
+        _depthView = null;
+
+        _depthTexture?.Dispose();
+        _depthTexture = null;
+
+        _renderTarget?.Dispose();
+        _renderTarget = null;
     }
 
     private static void GetSize(
@@ -343,7 +420,9 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         out int width,
         out int height)
     {
-        if (!GetClientRect(windowHandle, out Win32Rect bounds))
+        if (!GetClientRect(
+                windowHandle,
+                out Win32Rect bounds))
         {
             throw new InvalidOperationException(
                 "Не удалось получить размеры окна Direct3D.");
@@ -365,11 +444,14 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         _context?.UnsetRenderTargets();
         _context?.Flush();
 
-        _renderTarget?.Dispose();
-        _renderTarget = null;
+        foreach (VegetationGpuMesh mesh in _meshes)
+        {
+            mesh.Dispose();
+        }
 
-        _instanceBuffer?.Dispose();
-        _instanceBuffer = null;
+        _meshes.Clear();
+
+        ReleaseRenderTargets();
 
         _frameBuffer?.Dispose();
         _frameBuffer = null;
@@ -398,7 +480,15 @@ internal sealed class VegetationPreviewRenderer : IDisposable
         _factory?.Dispose();
         _factory = null;
 
+        _sceneCenter = Vector3.Zero;
         _instanceCount = 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FrameConstants
+    {
+        public Matrix4x4 ViewProjection;
+        public Vector4 Frame;
     }
 
     [StructLayout(LayoutKind.Sequential)]
