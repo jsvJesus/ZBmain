@@ -7,18 +7,18 @@
         <SelfContained>false</SelfContained>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
     </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Avalonia.Desktop" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
         <PackageReference Include="Silk.NET.OpenGL" />
+        <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.D3DCompiler" />
         <PackageReference Include="BCnEncoder.Net" />
         <PackageReference Include="BCnEncoder.Net.ImageSharp" />
         <PackageReference Include="SixLabors.ImageSharp" />
-        <ProjectReference Include="..\Core\Core.csproj" />
-        <PackageReference Include="Vortice.Direct3D11" />
-        <PackageReference Include="Vortice.D3DCompiler" />
     </ItemGroup>
     <ItemGroup>
       <ClCompile Include="..\..\bin\packs\shaders\Vegetation.hlsl">
