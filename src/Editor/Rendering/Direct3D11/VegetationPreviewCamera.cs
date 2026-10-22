@@ -15,22 +15,22 @@ internal static class VegetationPreviewCamera
     {
         Vector3 target = center + new Vector3(
             0f,
-            1f,
+            0.8f,
             0f);
 
         Vector3 cameraPosition = center + new Vector3(
-            28f,
-            18f,
-            32f);
+            14f,
+            8f,
+            16f);
 
         Matrix4x4 view = Matrix4x4.CreateLookAt(
             cameraPosition,
             target,
             Vector3.UnitY);
 
-        float aspectRatio = Math.Max(
-            1,
-            width) / (float)Math.Max(1, height);
+        float aspectRatio =
+            Math.Max(1, width) /
+            (float)Math.Max(1, height);
 
         Matrix4x4 projection =
             Matrix4x4.CreatePerspectiveFieldOfView(
