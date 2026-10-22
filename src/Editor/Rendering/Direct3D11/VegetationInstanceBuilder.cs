@@ -243,11 +243,11 @@ internal static class VegetationInstanceBuilder
         float d01 = ((density >> 8) & 0xF) / 15f;
         float d11 = ((density >> 12) & 0xF) / 15f;
 
-        float bottom = MathF.Lerp(d00, d10, u);
-        float top = MathF.Lerp(d01, d11, u);
+        float bottom = d00 + (d10 - d00) * u;
+        float top = d01 + (d11 - d01) * u;
 
         return Math.Clamp(
-            MathF.Lerp(bottom, top, v),
+            bottom + (top - bottom) * v,
             0f,
             1f);
     }
