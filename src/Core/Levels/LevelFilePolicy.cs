@@ -26,15 +26,16 @@ public static class LevelFilePolicy
             return false;
         }
 
-        string firstDirectory = path.Split('/')[0];
-
-        if (IsExcluded(name))
+        if (IsExcluded(name) ||
+            LevelTexturePolicy.IsBakedLightingTexture(path))
         {
             return false;
         }
 
         if (path.Contains('/'))
         {
+            string firstDirectory = path.Split('/')[0];
+
             return firstDirectory.Equals(
                        "terrain",
                        StringComparison.OrdinalIgnoreCase) ||
@@ -46,41 +47,18 @@ public static class LevelFilePolicy
                        StringComparison.OrdinalIgnoreCase);
         }
 
-        if (name.Equals(
-                "level",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (name.StartsWith(
-                "level.",
-                StringComparison.OrdinalIgnoreCase) ||
-            name.StartsWith(
-                "level_",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (name.Equals(
-                "build_details.dds",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (name.StartsWith(
-                "lmap#",
-                StringComparison.OrdinalIgnoreCase) &&
-            name.EndsWith(
-                ".dds",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return false;
+        return name.Equals(
+                   "level",
+                   StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith(
+                   "level.",
+                   StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith(
+                   "level_",
+                   StringComparison.OrdinalIgnoreCase) ||
+               name.Equals(
+                   "build_details.dds",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsExcluded(string name)

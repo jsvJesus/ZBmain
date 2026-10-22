@@ -1,3 +1,6 @@
+
+using Core.Levels;
+
 namespace Editor.Rendering;
 
 public sealed record XRayMaterialReference(
@@ -59,9 +62,16 @@ public sealed record XRayMaterialReference(
             ? textures[0]
             : string.Empty;
 
+        if (LevelTexturePolicy.IsBakedLightingTexture(baseTexture))
+        {
+            baseTexture = string.Empty;
+        }
+
         string[] auxiliary = textures
             .Skip(1)
-            .Where(texture => !string.IsNullOrWhiteSpace(texture))
+            .Where(texture =>
+                !string.IsNullOrWhiteSpace(texture) &&
+                !LevelTexturePolicy.IsBakedLightingTexture(texture))
             .ToArray();
 
         return new XRayMaterialReference(
