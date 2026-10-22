@@ -19,6 +19,7 @@
         <PackageReference Include="BCnEncoder.Net" />
         <PackageReference Include="BCnEncoder.Net.ImageSharp" />
         <PackageReference Include="SixLabors.ImageSharp" />
+        <ProjectReference Include="..\Core\Core.csproj" />
     </ItemGroup>
     <ItemGroup>
       <ClCompile Include="..\..\bin\packs\shaders\Vegetation.hlsl">
