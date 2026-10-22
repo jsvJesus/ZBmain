@@ -78,7 +78,17 @@ public sealed class MaterialTextureLoader
             "textures");
 
         IndexDirectory(
-            editableLevel,
+            Path.Combine(editableLevel, "materials"),
+            _levelFiles,
+            _levelNames);
+
+        IndexDirectory(
+            Path.Combine(editableLevel, "textures"),
+            _levelFiles,
+            _levelNames);
+
+        IndexDirectory(
+            Path.Combine(editableLevel, "source"),
             _levelFiles,
             _levelNames);
 

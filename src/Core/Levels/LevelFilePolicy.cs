@@ -13,7 +13,8 @@ public static class LevelFilePolicy
         "level.som",
         "level.light",
         "level.env_mod",
-        "level.fog_vol"
+        "level.fog_vol",
+        "level.hom"
     ];
 
     public static bool Include(string relativePath)

@@ -6,13 +6,15 @@ namespace Editor.ViewModels;
 
 public sealed class MainViewModel : ViewModelBase
 {
-    private readonly LevelArchiveImporter _importer = new();
+    private readonly LevelWorkspaceImporter _importer = new();
     private readonly RenderLevelReader _reader = new();
 
     private string? _selectedSource;
     private string? _selectedPackage;
+
     private string _sceneTitle = "Пустая сцена";
     private string _statusText = "Сцена не загружена.";
+
     private RenderLevel? _scene;
     private bool _isBusy;
 
@@ -79,8 +81,8 @@ public sealed class MainViewModel : ViewModelBase
     {
         LevelPaths.EnsureDirectories();
 
-        string? oldSource = SelectedSource;
-        string? oldPackage = SelectedPackage;
+        string? previousSource = SelectedSource;
+        string? previousPackage = SelectedPackage;
 
         SourceLevels.Clear();
         SavedLevels.Clear();
@@ -95,12 +97,14 @@ public sealed class MainViewModel : ViewModelBase
             SavedLevels.Add(name);
         }
 
-        SelectedSource = SourceLevels.Contains(oldSource)
-            ? oldSource
+        SelectedSource = previousSource is not null &&
+                         SourceLevels.Contains(previousSource)
+            ? previousSource
             : null;
 
-        SelectedPackage = SavedLevels.Contains(oldPackage)
-            ? oldPackage
+        SelectedPackage = previousPackage is not null &&
+                          SavedLevels.Contains(previousPackage)
+            ? previousPackage
             : null;
     }
 
@@ -126,25 +130,27 @@ public sealed class MainViewModel : ViewModelBase
 
         _isBusy = true;
 
-        string name = SelectedSource;
+        string levelName = SelectedSource;
 
         StatusText =
-            $"Конвертация {name}: обработка файлов...";
+            $"Импорт {levelName}: создание рабочей папки...";
 
         try
         {
-            LevelImportResult result = await Task.Run(
-                () => _importer.Import(name));
+            LevelWorkspaceImportResult result =
+                await Task.Run(
+                    () => _importer.Import(levelName));
 
             Refresh();
-            SelectedPackage = name;
+            SelectedPackage = levelName;
 
             await OpenSelectedAsync();
 
             StatusText =
                 $"Импортировано: {result.FileCount} файлов. " +
-                $"Визуальных мешей: {result.VisualMeshes:N0}, " +
-                $"треугольников: {result.VisualTriangles:N0}.";
+                $"Мешей: {result.VisualMeshes:N0}, " +
+                $"треугольников: {result.VisualTriangles:N0}. " +
+                $"Папка: {result.DirectoryPath}";
         }
         catch (Exception exception) when (
             exception is IOException or
@@ -167,19 +173,20 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (string.IsNullOrWhiteSpace(SelectedPackage))
         {
-            StatusText = "Выберите сохранённый уровень.";
+            StatusText = "Выберите уровень.";
             return;
         }
 
-        string name = SelectedPackage;
+        string levelName = SelectedPackage;
 
-        StatusText = $"Открытие {name}...";
+        StatusText = $"Открытие {levelName}...";
 
         try
         {
+            string path = LevelPaths.OpenPath(levelName);
+
             RenderLevel level = await Task.Run(
-                () => _reader.Read(
-                    LevelPaths.PackagePath(name)));
+                () => _reader.Read(path));
 
             Scene = level;
             SceneTitle = level.Name;
@@ -187,8 +194,12 @@ public sealed class MainViewModel : ViewModelBase
             long triangles = level.Surfaces.Sum(
                 surface => (long)surface.IndexCount / 3);
 
+            string sourceType = Directory.Exists(path)
+                ? "рабочая папка"
+                : "архив";
+
             StatusText =
-                $"Открыто: {level.Name}. " +
+                $"Открыто: {level.Name} ({sourceType}). " +
                 $"Мешей: {level.Surfaces.Length:N0}, " +
                 $"треугольников: {triangles:N0}, " +
                 $"материалов: {level.Materials.Length:N0}.";

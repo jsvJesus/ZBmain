@@ -51,7 +51,7 @@
                                Foreground="#DCEBFA" />
 
                     <TextBlock Grid.Row="1"
-                               Text="packs/import/levels"
+                               Text="packs/levels/имя_уровня"
                                FontSize="11"
                                Foreground="#91A6BD" />
 

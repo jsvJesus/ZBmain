@@ -1,3 +1,4 @@
+
 using System.IO.Compression;
 using System.Numerics;
 using System.Text;
@@ -35,20 +36,99 @@ public sealed record RenderLevel(
 
 public sealed class RenderLevelReader
 {
-    public RenderLevel Read(string packagePath)
+    public RenderLevel Read(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            return ReadDirectory(path);
+        }
+
+        if (File.Exists(path))
+        {
+            return ReadArchive(path);
+        }
+
+        throw new FileNotFoundException(
+            $"Уровень не найден: {path}");
+    }
+
+    private static RenderLevel ReadDirectory(string directory)
+    {
+        string geometryPath = Path.Combine(
+            directory,
+            "geometry",
+            "render.zgeom");
+
+        if (!File.Exists(geometryPath))
+        {
+            throw new InvalidDataException(
+                "В папке уровня отсутствует geometry/render.zgeom.");
+        }
+
+        string collisionPath = Path.Combine(
+            directory,
+            "geometry",
+            "collision.zmesh");
+
+        using Stream geometry = File.OpenRead(geometryPath);
+
+        return ReadGeometry(
+            geometry,
+            Path.GetFileName(directory),
+            () =>
+            {
+                if (!File.Exists(collisionPath))
+                {
+                    return DefaultBounds();
+                }
+
+                using Stream collision = File.OpenRead(
+                    collisionPath);
+
+                return ReadBounds(collision);
+            });
+    }
+
+    private static RenderLevel ReadArchive(string packagePath)
     {
         using ZipArchive archive =
             ZipFile.OpenRead(packagePath);
 
-        ZipArchiveEntry entry =
+        ZipArchiveEntry geometryEntry =
             archive.GetEntry("geometry/render.zgeom") ??
             throw new InvalidDataException(
-                "В уровне отсутствует render.zgeom.");
+                "В архиве отсутствует geometry/render.zgeom.");
 
-        using Stream stream = entry.Open();
+        using Stream geometry = geometryEntry.Open();
+
+        return ReadGeometry(
+            geometry,
+            Path.GetFileNameWithoutExtension(packagePath),
+            () =>
+            {
+                ZipArchiveEntry? collisionEntry =
+                    archive.GetEntry("geometry/collision.zmesh");
+
+                if (collisionEntry is null)
+                {
+                    return DefaultBounds();
+                }
+
+                using Stream collision = collisionEntry.Open();
+
+                return ReadBounds(collision);
+            });
+    }
+
+    private static RenderLevel ReadGeometry(
+        Stream stream,
+        string levelName,
+        Func<(Vector3 Min, Vector3 Max)> readBounds)
+    {
         using var reader = new BinaryReader(
             stream,
-            Encoding.UTF8);
+            Encoding.UTF8,
+            leaveOpen: true);
 
         if (!reader.ReadBytes(4).SequenceEqual("ZRGM"u8))
         {
@@ -61,7 +141,7 @@ public sealed class RenderLevelReader
         if (version is not (1 or 2 or 3))
         {
             throw new InvalidDataException(
-                $"Неизвестная версия геометрии: {version}.");
+                $"Неподдерживаемая версия геометрии: {version}.");
         }
 
         int materialCount = ReadCount(reader, 100_000);
@@ -78,12 +158,12 @@ public sealed class RenderLevelReader
 
         var surfaces = new RenderSurface[surfaceCount];
 
-        for (int i = 0; i < materialCount; i++)
+        for (int i = 0; i < materials.Length; i++)
         {
             materials[i] = reader.ReadString();
         }
 
-        for (int i = 0; i < vertexBufferCount; i++)
+        for (int i = 0; i < vertexBuffers.Length; i++)
         {
             int vertexCount = ReadCount(
                 reader,
@@ -99,8 +179,7 @@ public sealed class RenderLevelReader
                  vertex++)
             {
                 int offset =
-                    vertex *
-                    RenderVertexBuffer.FloatsPerVertex;
+                    vertex * RenderVertexBuffer.FloatsPerVertex;
 
                 data[offset] = reader.ReadSingle();
                 data[offset + 1] = reader.ReadSingle();
@@ -124,7 +203,7 @@ public sealed class RenderLevelReader
             vertexBuffers[i] = new RenderVertexBuffer(data);
         }
 
-        for (int i = 0; i < indexBufferCount; i++)
+        for (int i = 0; i < indexBuffers.Length; i++)
         {
             int count = ReadCount(reader, 60_000_000);
             var data = new ushort[count];
@@ -137,7 +216,7 @@ public sealed class RenderLevelReader
             indexBuffers[i] = new RenderIndexBuffer(data);
         }
 
-        for (int i = 0; i < surfaceCount; i++)
+        for (int i = 0; i < surfaces.Length; i++)
         {
             int material = reader.ReadInt32();
             int type = reader.ReadInt32();
@@ -164,7 +243,7 @@ public sealed class RenderLevelReader
                     indexBuffers[ib].Data.Length)
             {
                 throw new InvalidDataException(
-                    $"Неверные диапазоны меша {i}.");
+                    $"Повреждена ссылка на геометрию меша {i}.");
             }
 
             surfaces[i] = new RenderSurface(
@@ -179,27 +258,22 @@ public sealed class RenderLevelReader
                 transform);
         }
 
-        bool legacyMirrorX = version < 3;
+        (Vector3 min, Vector3 max) = readBounds();
 
-        if (legacyMirrorX)
+        if (version < 3)
         {
-            ApplyLegacyMirrorX(
-                vertexBuffers,
-                surfaces);
-        }
+            ApplyLegacyMirrorX(vertexBuffers, surfaces);
 
-        (Vector3 min, Vector3 max) = ReadBounds(
-            archive,
-            legacyMirrorX);
+            (min, max) = MirrorBoundsX(min, max);
+        }
 
         if (min == max)
         {
-            min = new Vector3(-500);
-            max = new Vector3(500);
+            (min, max) = DefaultBounds();
         }
 
         return new RenderLevel(
-            Path.GetFileNameWithoutExtension(packagePath),
+            levelName,
             materials,
             vertexBuffers,
             indexBuffers,
@@ -228,7 +302,8 @@ public sealed class RenderLevelReader
 
             surfaces[i] = surface with
             {
-                Transform = MirrorTransformX(surface.Transform)
+                Transform = MirrorTransformX(
+                    surface.Transform)
             };
         }
     }
@@ -243,6 +318,52 @@ public sealed class RenderLevelReader
              0f, 0f, 0f, 1f);
 
         return mirror * source * mirror;
+    }
+
+    private static (Vector3 Min, Vector3 Max) ReadBounds(
+        Stream stream)
+    {
+        using var reader = new BinaryReader(
+            stream,
+            Encoding.UTF8,
+            leaveOpen: true);
+
+        if (!reader.ReadBytes(4).SequenceEqual("ZMSH"u8) ||
+            reader.ReadUInt32() != 1)
+        {
+            return DefaultBounds();
+        }
+
+        reader.ReadUInt32();
+        reader.ReadUInt32();
+
+        Vector3 min = new(
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle());
+
+        Vector3 max = new(
+            reader.ReadSingle(),
+            reader.ReadSingle(),
+            reader.ReadSingle());
+
+        return (min, max);
+    }
+
+    private static (Vector3 Min, Vector3 Max) DefaultBounds()
+    {
+        return (
+            new Vector3(-500f),
+            new Vector3(500f));
+    }
+
+    private static (Vector3 Min, Vector3 Max) MirrorBoundsX(
+        Vector3 min,
+        Vector3 max)
+    {
+        return (
+            new Vector3(-max.X, min.Y, min.Z),
+            new Vector3(-min.X, max.Y, max.Z));
     }
 
     private static int ReadCount(
@@ -283,60 +404,5 @@ public sealed class RenderLevelReader
             reader.ReadSingle(),
             reader.ReadSingle(),
             reader.ReadSingle());
-    }
-
-    private static (Vector3 Min, Vector3 Max) ReadBounds(
-        ZipArchive archive,
-        bool mirrorX)
-    {
-        ZipArchiveEntry? collision =
-            archive.GetEntry("geometry/collision.zmesh");
-
-        if (collision is null)
-        {
-            return (
-                new Vector3(-500),
-                new Vector3(500));
-        }
-
-        using Stream stream = collision.Open();
-        using var reader = new BinaryReader(stream);
-
-        if (!reader.ReadBytes(4).SequenceEqual("ZMSH"u8) ||
-            reader.ReadUInt32() != 1)
-        {
-            return (
-                new Vector3(-500),
-                new Vector3(500));
-        }
-
-        reader.ReadUInt32();
-        reader.ReadUInt32();
-
-        Vector3 min = new(
-            reader.ReadSingle(),
-            reader.ReadSingle(),
-            reader.ReadSingle());
-
-        Vector3 max = new(
-            reader.ReadSingle(),
-            reader.ReadSingle(),
-            reader.ReadSingle());
-
-        if (mirrorX)
-        {
-            (min, max) = MirrorBoundsX(min, max);
-        }
-
-        return (min, max);
-    }
-
-    private static (Vector3 Min, Vector3 Max) MirrorBoundsX(
-        Vector3 min,
-        Vector3 max)
-    {
-        return (
-            new Vector3(-max.X, min.Y, min.Z),
-            new Vector3(-min.X, max.Y, max.Z));
     }
 }
