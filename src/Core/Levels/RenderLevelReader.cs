@@ -1,4 +1,3 @@
-
 using System.IO.Compression;
 using System.Numerics;
 using System.Text;
@@ -59,7 +58,7 @@ public sealed class RenderLevelReader
 
         int version = reader.ReadInt32();
 
-        if (version is not (1 or 2))
+        if (version is not (1 or 2 or 3))
         {
             throw new InvalidDataException(
                 $"Неизвестная версия геометрии: {version}.");
@@ -180,7 +179,18 @@ public sealed class RenderLevelReader
                 transform);
         }
 
-        (Vector3 min, Vector3 max) = ReadBounds(archive);
+        bool legacyMirrorX = version < 3;
+
+        if (legacyMirrorX)
+        {
+            ApplyLegacyMirrorX(
+                vertexBuffers,
+                surfaces);
+        }
+
+        (Vector3 min, Vector3 max) = ReadBounds(
+            archive,
+            legacyMirrorX);
 
         if (min == max)
         {
@@ -196,6 +206,43 @@ public sealed class RenderLevelReader
             surfaces,
             min,
             max);
+    }
+
+    private static void ApplyLegacyMirrorX(
+        RenderVertexBuffer[] vertexBuffers,
+        RenderSurface[] surfaces)
+    {
+        foreach (RenderVertexBuffer buffer in vertexBuffers)
+        {
+            for (int i = 0;
+                 i < buffer.Data.Length;
+                 i += RenderVertexBuffer.FloatsPerVertex)
+            {
+                buffer.Data[i] = -buffer.Data[i];
+            }
+        }
+
+        for (int i = 0; i < surfaces.Length; i++)
+        {
+            RenderSurface surface = surfaces[i];
+
+            surfaces[i] = surface with
+            {
+                Transform = MirrorTransformX(surface.Transform)
+            };
+        }
+    }
+
+    private static Matrix4x4 MirrorTransformX(
+        Matrix4x4 source)
+    {
+        Matrix4x4 mirror = new(
+            -1f, 0f, 0f, 0f,
+             0f, 1f, 0f, 0f,
+             0f, 0f, 1f, 0f,
+             0f, 0f, 0f, 1f);
+
+        return mirror * source * mirror;
     }
 
     private static int ReadCount(
@@ -239,7 +286,8 @@ public sealed class RenderLevelReader
     }
 
     private static (Vector3 Min, Vector3 Max) ReadBounds(
-        ZipArchive archive)
+        ZipArchive archive,
+        bool mirrorX)
     {
         ZipArchiveEntry? collision =
             archive.GetEntry("geometry/collision.zmesh");
@@ -275,6 +323,20 @@ public sealed class RenderLevelReader
             reader.ReadSingle(),
             reader.ReadSingle());
 
+        if (mirrorX)
+        {
+            (min, max) = MirrorBoundsX(min, max);
+        }
+
         return (min, max);
+    }
+
+    private static (Vector3 Min, Vector3 Max) MirrorBoundsX(
+        Vector3 min,
+        Vector3 max)
+    {
+        return (
+            new Vector3(-max.X, min.Y, min.Z),
+            new Vector3(-min.X, max.Y, max.Z));
     }
 }

@@ -399,8 +399,7 @@ public sealed class XRayGeometryConverter
             leaveOpen: true);
 
         writer.Write("ZRGM"u8);
-
-        writer.Write(2);
+        writer.Write(3);
 
         writer.Write(materials.Length);
         writer.Write(vertices.Length);
@@ -418,7 +417,7 @@ public sealed class XRayGeometryConverter
 
             for (int i = 0; i < buffer.Positions.Length; i++)
             {
-                Vector3 point = buffer.Positions[i];
+                Vector3 point = MirrorPositionX(buffer.Positions[i]);
                 Vector2 uv0 = buffer.Uvs[i];
                 Vector2 uv1 = buffer.LightmapUvs[i];
 
@@ -457,7 +456,7 @@ public sealed class XRayGeometryConverter
             writer.Write(surface.IndexOffset);
             writer.Write(surface.IndexCount);
 
-            Matrix4x4 m = surface.Transform;
+            Matrix4x4 m = MirrorTransformX(surface.Transform);
 
             writer.Write(m.M11);
             writer.Write(m.M12);
@@ -604,5 +603,34 @@ public sealed class XRayGeometryConverter
         return float.IsFinite(value.X) &&
                float.IsFinite(value.Y) &&
                float.IsFinite(value.Z);
+    }
+
+    private static Vector3 MirrorPositionX(Vector3 value)
+    {
+        return new Vector3(
+            -value.X,
+            value.Y,
+            value.Z);
+    }
+
+    private static Matrix4x4 MirrorTransformX(
+        Matrix4x4 source)
+    {
+        Matrix4x4 mirror = new(
+            -1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f);
+
+        return mirror * source * mirror;
+    }
+
+    private static (Vector3 Min, Vector3 Max) MirrorBoundsX(
+        Vector3 min,
+        Vector3 max)
+    {
+        return (
+            new Vector3(-max.X, min.Y, min.Z),
+            new Vector3(-min.X, max.Y, max.Z));
     }
 }
