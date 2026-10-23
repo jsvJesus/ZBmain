@@ -18,7 +18,9 @@ internal sealed class SceneViewportRenderer : IDisposable
 {
     private readonly Stopwatch _clock = new();
     private readonly ViewportCamera _camera = new();
-    private readonly List<VegetationGpuMesh> _vegetation = new();
+
+    private readonly List<VegetationGpuMesh> _vegetation =
+        new();
 
     private IDXGIFactory2? _factory;
     private ID3D11Device? _device;
@@ -28,6 +30,9 @@ internal sealed class SceneViewportRenderer : IDisposable
     private ID3D11RenderTargetView? _renderTarget;
     private ID3D11Texture2D? _depthTexture;
     private ID3D11DepthStencilView? _depthView;
+
+    private ID3D11DepthStencilState? _depthState;
+    private ID3D11BlendState? _opaqueBlend;
 
     private ID3D11VertexShader? _vegetationVS;
     private ID3D11PixelShader? _vegetationPS;
@@ -45,6 +50,12 @@ internal sealed class SceneViewportRenderer : IDisposable
 
     public void Initialize(nint windowHandle)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "Direct3D 11 требует Windows.");
+        }
+
         try
         {
             _factory = CreateDXGIFactory1<IDXGIFactory2>();
@@ -117,7 +128,17 @@ internal sealed class SceneViewportRenderer : IDisposable
             _sampler = _device.CreateSamplerState(
                 SamplerDescription.LinearWrap);
 
+            _depthState = _device.CreateDepthStencilState(
+                new DepthStencilDescription(
+                    true,
+                    DepthWriteMask.All,
+                    ComparisonFunction.LessEqual));
+
+            _opaqueBlend = _device.CreateBlendState(
+                BlendDescription.Opaque);
+
             _camera.Reset(null, null);
+
             _clock.Restart();
         }
         catch
@@ -131,7 +152,8 @@ internal sealed class SceneViewportRenderer : IDisposable
         RenderLevel? scene,
         DetailLevel? details)
     {
-        if (_device is null || _context is null)
+        if (_device is null ||
+            _context is null)
         {
             return;
         }
@@ -158,17 +180,10 @@ internal sealed class SceneViewportRenderer : IDisposable
                 _device,
                 scene);
 
-            Vector3? vegetationCenter = null;
-
             if (details is not null)
             {
                 VegetationBuildResult build =
                     VegetationInstanceBuilder.Build(details);
-
-                if (build.InstanceCount > 0)
-                {
-                    vegetationCenter = build.Center;
-                }
 
                 foreach (VegetationBatch batch in build.Batches)
                 {
@@ -186,16 +201,7 @@ internal sealed class SceneViewportRenderer : IDisposable
                 }
             }
 
-            if (vegetationCenter.HasValue)
-            {
-                Vector3 center = vegetationCenter.Value;
-
-                center.Y = (scene.Min.Y + scene.Max.Y) * 0.5f;
-
-                vegetationCenter = center;
-            }
-
-            _camera.Reset(scene, vegetationCenter);
+            _camera.Reset(scene, null);
         }
         catch
         {
@@ -204,12 +210,14 @@ internal sealed class SceneViewportRenderer : IDisposable
         }
     }
 
-    public void Look(float dx, float dy)
+    public void Look(float deltaX, float deltaY)
     {
-        _camera.Look(dx, dy);
+        _camera.Look(deltaX, deltaY);
     }
 
-    public void Fly(Vector3 direction, float deltaTime)
+    public void Fly(
+        Vector3 direction,
+        float deltaTime)
     {
         _camera.Fly(direction, deltaTime);
     }
@@ -237,7 +245,8 @@ internal sealed class SceneViewportRenderer : IDisposable
             out int width,
             out int height);
 
-        if (width != _width || height != _height)
+        if (width != _width ||
+            height != _height)
         {
             Resize(width, height);
         }
@@ -251,6 +260,13 @@ internal sealed class SceneViewportRenderer : IDisposable
         _context.OMSetRenderTargets(
             _renderTarget,
             _depthView);
+
+        _context.OMSetDepthStencilState(
+            _depthState,
+            0);
+
+        _context.OMSetBlendState(
+            _opaqueBlend);
 
         _context.RSSetViewport(
             0,
@@ -297,7 +313,8 @@ internal sealed class SceneViewportRenderer : IDisposable
                 0,
                 _frameBuffer);
 
-            _context.RSSetState(_rasterizer);
+            _context.RSSetState(
+                _rasterizer);
 
             _context.PSSetSampler(
                 0,
@@ -422,10 +439,16 @@ internal sealed class SceneViewportRenderer : IDisposable
 
     private void CreateRenderTargets()
     {
-        using ID3D11Texture2D backBuffer =
-            _swapChain!.GetBuffer<ID3D11Texture2D>(0);
+        if (_device is null ||
+            _swapChain is null)
+        {
+            return;
+        }
 
-        _renderTarget = _device!.CreateRenderTargetView(
+        using ID3D11Texture2D backBuffer =
+            _swapChain.GetBuffer<ID3D11Texture2D>(0);
+
+        _renderTarget = _device.CreateRenderTargetView(
             backBuffer);
 
         _depthTexture = _device.CreateTexture2D(
@@ -446,13 +469,19 @@ internal sealed class SceneViewportRenderer : IDisposable
 
     private void Resize(int width, int height)
     {
-        _context!.UnsetRenderTargets();
+        if (_context is null ||
+            _swapChain is null)
+        {
+            return;
+        }
+
+        _context.UnsetRenderTargets();
 
         ReleaseRenderTargets();
 
         _context.Flush();
 
-        _swapChain!.ResizeBuffers(
+        _swapChain.ResizeBuffers(
             2,
             (uint)width,
             (uint)height,
@@ -534,6 +563,12 @@ internal sealed class SceneViewportRenderer : IDisposable
 
         _rasterizer?.Dispose();
         _rasterizer = null;
+
+        _depthState?.Dispose();
+        _depthState = null;
+
+        _opaqueBlend?.Dispose();
+        _opaqueBlend = null;
 
         _vegetationLayout?.Dispose();
         _vegetationLayout = null;

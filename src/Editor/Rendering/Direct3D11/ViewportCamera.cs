@@ -6,6 +6,7 @@ namespace Editor.Rendering.Direct3D11;
 internal sealed class ViewportCamera
 {
     private const float MouseSensitivity = 0.003f;
+    private const float FieldOfView = MathF.PI / 3f;
 
     private Vector3 _position;
     private Vector3 _target;
@@ -14,36 +15,73 @@ internal sealed class ViewportCamera
     private float _pitch;
     private float _speed = 20f;
     private float _radius = 100f;
+    private float _farPlane = 4000f;
 
     public void Reset(
         RenderLevel? level,
         Vector3? vegetationCenter)
     {
-        _target = vegetationCenter ??
-            (level is null
-                ? Vector3.Zero
-                : (level.Min + level.Max) * 0.5f);
+        if (level is null)
+        {
+            _target = vegetationCenter ?? Vector3.Zero;
 
-        _radius = level is null
-            ? 100f
-            : MathF.Max(
-                25f,
-                (level.Max - level.Min).Length() * 0.5f);
+            _radius = 100f;
+            _farPlane = 4000f;
+            _speed = 20f;
 
-        float distance = vegetationCenter.HasValue
-            ? 30f
-            : Math.Clamp(_radius, 50f, 400f);
+            _position = _target + new Vector3(
+                75f,
+                65f,
+                75f);
 
-        _position = _target + new Vector3(
-            distance * 0.75f,
-            distance * 0.50f,
-            distance * 0.75f);
+            LookAt(_target);
+            return;
+        }
+
+        Vector3 minimum = level.Min;
+        Vector3 maximum = level.Max;
+
+        _target = (minimum + maximum) * 0.5f;
+
+        Vector3 size = maximum - minimum;
+
+        float horizontalSize = MathF.Max(
+            100f,
+            MathF.Max(size.X, size.Z));
+
+        float verticalSize = MathF.Max(
+            20f,
+            size.Y);
+
+        _radius = MathF.Max(
+            100f,
+            size.Length() * 0.5f);
+
+        float distance = Math.Clamp(
+            horizontalSize * 0.65f,
+            120f,
+            2500f);
+
+        float altitude = MathF.Max(
+            distance * 0.8f,
+            verticalSize * 0.35f + 30f);
+
+        _position = new Vector3(
+            _target.X + distance * 0.65f,
+            maximum.Y + altitude,
+            _target.Z + distance * 0.65f);
+
+        _farPlane = Math.Clamp(
+            size.Length() * 5f,
+            4000f,
+            16000f);
+
+        _speed = Math.Clamp(
+            _radius * 0.08f,
+            10f,
+            150f);
 
         LookAt(_target);
-
-        _speed = vegetationCenter.HasValue
-            ? 15f
-            : Math.Clamp(_radius * 0.08f, 10f, 120f);
     }
 
     public void Look(float deltaX, float deltaY)
@@ -114,7 +152,7 @@ internal sealed class ViewportCamera
     public void ShowMapTopDown()
     {
         float altitude = MathF.Max(
-            100f,
+            150f,
             _radius * 2.5f);
 
         _position = _target + new Vector3(
@@ -134,15 +172,21 @@ internal sealed class ViewportCamera
             _position + GetForward(),
             Vector3.UnitY);
 
-        float aspect = Math.Max(1, width) /
+        float aspectRatio =
+            Math.Max(1, width) /
             (float)Math.Max(1, height);
+
+        float nearPlane = Math.Clamp(
+            _farPlane / 10000f,
+            0.5f,
+            2f);
 
         Matrix4x4 projection =
             Matrix4x4.CreatePerspectiveFieldOfView(
-                MathF.PI / 3f,
-                aspect,
-                0.1f,
-                MathF.Max(10000f, _radius * 20f));
+                FieldOfView,
+                aspectRatio,
+                nearPlane,
+                _farPlane);
 
         return view * projection;
     }

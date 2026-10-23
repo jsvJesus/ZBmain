@@ -12,19 +12,24 @@ namespace Editor.Controls;
 
 public sealed class Direct3D11SceneView : NativeControlHost
 {
+    private const string WindowClassName =
+        "Direct3D11ViewportHost";
+
     private const uint WsChild = 0x40000000;
     private const uint WsVisible = 0x10000000;
     private const uint WsTabStop = 0x00010000;
     private const uint WsClipSiblings = 0x04000000;
     private const uint WsClipChildren = 0x02000000;
 
+    private const uint WmEraseBackground = 0x0014;
+    private const uint WmKillFocus = 0x0008;
     private const uint WmMouseMove = 0x0200;
+    private const uint WmLeftButtonDown = 0x0201;
     private const uint WmRightButtonDown = 0x0204;
     private const uint WmRightButtonUp = 0x0205;
     private const uint WmMouseWheel = 0x020A;
+    private const uint WmCaptureChanged = 0x0215;
     private const uint WmKeyDown = 0x0100;
-    private const uint WmKeyUp = 0x0101;
-    private const uint WmKillFocus = 0x0008;
 
     private const int VkW = 0x57;
     private const int VkA = 0x41;
@@ -34,18 +39,27 @@ public sealed class Direct3D11SceneView : NativeControlHost
     private const int VkShift = 0x10;
     private const int VkHome = 0x24;
 
+    private const int ErrorClassAlreadyExists = 1410;
+
+    private static readonly WindowProcedureCallback
+        SharedProcedure = DispatchWindowMessage;
+
+    private static readonly Dictionary<
+        nint,
+        Direct3D11SceneView> Windows = new();
+
+    private static bool _windowClassRegistered;
+
     private readonly DispatcherTimer _timer;
     private readonly Stopwatch _clock = new();
-    private readonly HashSet<int> _keys = new();
-
-    private readonly SubclassProcedure _procedure;
 
     private SceneViewportRenderer? _renderer;
+
     private RenderLevel? _scene;
     private DetailLevel? _vegetation;
 
     private nint _handle;
-    private bool _subclassInstalled;
+
     private bool _rightButtonHeld;
     private bool _renderingEnabled = true;
 
@@ -57,8 +71,6 @@ public sealed class Direct3D11SceneView : NativeControlHost
 
     public Direct3D11SceneView()
     {
-        _procedure = WindowProcedure;
-
         _timer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(16)
@@ -81,7 +93,9 @@ public sealed class Direct3D11SceneView : NativeControlHost
 
         try
         {
-            _renderer.SetScene(scene, vegetation);
+            _renderer.SetScene(
+                scene,
+                vegetation);
         }
         catch (Exception exception)
         {
@@ -96,13 +110,22 @@ public sealed class Direct3D11SceneView : NativeControlHost
         if (!enabled)
         {
             _timer.Stop();
-            _keys.Clear();
-            _rightButtonHeld = false;
+
+            if (_rightButtonHeld)
+            {
+                _rightButtonHeld = false;
+                ReleaseCapture();
+            }
+
+            return;
         }
-        else if (_renderer is not null &&
-                 _handle != IntPtr.Zero)
+
+        if (_renderer is not null &&
+            _handle != IntPtr.Zero)
         {
-            _lastFrameTime = _clock.Elapsed.TotalSeconds;
+            _lastFrameTime =
+                _clock.Elapsed.TotalSeconds;
+
             _timer.Start();
         }
     }
@@ -116,9 +139,13 @@ public sealed class Direct3D11SceneView : NativeControlHost
                 "Direct3D 11 требует Windows.");
         }
 
+        RegisterWindowClass();
+
+        nint instance = GetModuleHandleW(null);
+
         nint handle = CreateWindowExW(
             0,
-            "STATIC",
+            WindowClassName,
             string.Empty,
             WsChild |
             WsVisible |
@@ -131,7 +158,7 @@ public sealed class Direct3D11SceneView : NativeControlHost
             1,
             parent.Handle,
             IntPtr.Zero,
-            IntPtr.Zero,
+            instance,
             IntPtr.Zero);
 
         if (handle == IntPtr.Zero)
@@ -142,23 +169,17 @@ public sealed class Direct3D11SceneView : NativeControlHost
 
         _handle = handle;
 
+        Windows.Add(handle, this);
+
         try
         {
             _renderer = new SceneViewportRenderer();
+
             _renderer.Initialize(handle);
-            _renderer.SetScene(_scene, _vegetation);
 
-            if (!SetWindowSubclass(
-                    handle,
-                    _procedure,
-                    1,
-                    0))
-            {
-                throw new Win32Exception(
-                    Marshal.GetLastWin32Error());
-            }
-
-            _subclassInstalled = true;
+            _renderer.SetScene(
+                _scene,
+                _vegetation);
 
             _clock.Restart();
             _lastFrameTime = 0;
@@ -182,21 +203,17 @@ public sealed class Direct3D11SceneView : NativeControlHost
         _timer.Stop();
         _clock.Stop();
 
-        _keys.Clear();
         _rightButtonHeld = false;
 
-        if (_subclassInstalled)
+        if (GetCapture() == control.Handle)
         {
-            RemoveWindowSubclass(
-                control.Handle,
-                _procedure,
-                1);
-
-            _subclassInstalled = false;
+            ReleaseCapture();
         }
 
         _renderer?.Dispose();
         _renderer = null;
+
+        Windows.Remove(control.Handle);
 
         _handle = IntPtr.Zero;
 
@@ -206,16 +223,77 @@ public sealed class Direct3D11SceneView : NativeControlHost
         }
     }
 
-    private nint WindowProcedure(
+    private static void RegisterWindowClass()
+    {
+        if (_windowClassRegistered)
+        {
+            return;
+        }
+
+        var definition = new WindowClass
+        {
+            Size = (uint)Marshal.SizeOf<WindowClass>(),
+            Instance = GetModuleHandleW(null),
+            Procedure = Marshal.GetFunctionPointerForDelegate(
+                SharedProcedure),
+            ClassName = WindowClassName
+        };
+
+        ushort classAtom = RegisterClassExW(
+            in definition);
+
+        if (classAtom == 0)
+        {
+            int error = Marshal.GetLastWin32Error();
+
+            if (error != ErrorClassAlreadyExists)
+            {
+                throw new Win32Exception(error);
+            }
+        }
+
+        _windowClassRegistered = true;
+    }
+
+    private static nint DispatchWindowMessage(
         nint hwnd,
         uint message,
         nuint wParam,
-        nint lParam,
-        nuint subclassId,
-        nuint referenceData)
+        nint lParam)
+    {
+        if (Windows.TryGetValue(
+                hwnd,
+                out Direct3D11SceneView? control))
+        {
+            return control.ProcessWindowMessage(
+                hwnd,
+                message,
+                wParam,
+                lParam);
+        }
+
+        return DefWindowProcW(
+            hwnd,
+            message,
+            wParam,
+            lParam);
+    }
+
+    private nint ProcessWindowMessage(
+        nint hwnd,
+        uint message,
+        nuint wParam,
+        nint lParam)
     {
         switch (message)
         {
+            case WmEraseBackground:
+                return (nint)1;
+
+            case WmLeftButtonDown:
+                SetFocus(hwnd);
+                return IntPtr.Zero;
+
             case WmRightButtonDown:
                 SetFocus(hwnd);
                 SetCapture(hwnd);
@@ -231,11 +309,17 @@ public sealed class Direct3D11SceneView : NativeControlHost
 
             case WmRightButtonUp:
                 _rightButtonHeld = false;
-                ReleaseCapture();
+
+                if (GetCapture() == hwnd)
+                {
+                    ReleaseCapture();
+                }
+
                 return IntPtr.Zero;
 
             case WmMouseMove:
-                if (_rightButtonHeld)
+                if (_rightButtonHeld &&
+                    _renderingEnabled)
                 {
                     ReadPosition(
                         lParam,
@@ -250,43 +334,36 @@ public sealed class Direct3D11SceneView : NativeControlHost
                     _lastY = y;
                 }
 
-                break;
+                return IntPtr.Zero;
 
             case WmMouseWheel:
-                short wheel = unchecked((short)(
-                    ((ulong)wParam >> 16) & 0xFFFF));
+                if (_renderingEnabled)
+                {
+                    short wheel = unchecked((short)(
+                        ((ulong)wParam >> 16) & 0xFFFF));
 
-                _renderer?.AdjustSpeed(
-                    wheel / 120f);
+                    _renderer?.AdjustSpeed(
+                        wheel / 120f);
+                }
 
                 return IntPtr.Zero;
 
             case WmKeyDown:
-                int keyDown = (int)wParam;
-
-                if (keyDown == VkHome)
+                if ((int)wParam == VkHome)
                 {
                     _renderer?.ShowMapTopDown();
-                }
-                else
-                {
-                    _keys.Add(keyDown);
+                    return IntPtr.Zero;
                 }
 
-                return IntPtr.Zero;
-
-            case WmKeyUp:
-                _keys.Remove((int)wParam);
-                return IntPtr.Zero;
+                break;
 
             case WmKillFocus:
-                _keys.Clear();
+            case WmCaptureChanged:
                 _rightButtonHeld = false;
-                ReleaseCapture();
                 break;
         }
 
-        return DefSubclassProc(
+        return DefWindowProcW(
             hwnd,
             message,
             wParam,
@@ -313,17 +390,20 @@ public sealed class Direct3D11SceneView : NativeControlHost
 
         _lastFrameTime = now;
 
-        Vector3 movement = GetMovement();
-
-        if (movement.LengthSquared() > 0f)
-        {
-            _renderer.Fly(
-                movement,
-                deltaTime);
-        }
-
         try
         {
+            if (GetFocus() == _handle)
+            {
+                Vector3 movement = GetMovement();
+
+                if (movement.LengthSquared() > 0f)
+                {
+                    _renderer.Fly(
+                        movement,
+                        deltaTime);
+                }
+            }
+
             _renderer.Render(_handle);
         }
         catch (Exception exception)
@@ -332,21 +412,48 @@ public sealed class Direct3D11SceneView : NativeControlHost
         }
     }
 
-    private Vector3 GetMovement()
+    private static Vector3 GetMovement()
     {
         float x = 0f;
         float y = 0f;
         float z = 0f;
 
-        if (_keys.Contains(VkW)) z += 1f;
-        if (_keys.Contains(VkS)) z -= 1f;
-        if (_keys.Contains(VkD)) x += 1f;
-        if (_keys.Contains(VkA)) x -= 1f;
+        if (IsPressed(VkW))
+        {
+            z += 1f;
+        }
 
-        if (_keys.Contains(VkSpace)) y += 1f;
-        if (_keys.Contains(VkShift)) y -= 1f;
+        if (IsPressed(VkS))
+        {
+            z -= 1f;
+        }
+
+        if (IsPressed(VkD))
+        {
+            x += 1f;
+        }
+
+        if (IsPressed(VkA))
+        {
+            x -= 1f;
+        }
+
+        if (IsPressed(VkSpace))
+        {
+            y += 1f;
+        }
+
+        if (IsPressed(VkShift))
+        {
+            y -= 1f;
+        }
 
         return new Vector3(x, y, z);
+    }
+
+    private static bool IsPressed(int key)
+    {
+        return (GetAsyncKeyState(key) & 0x8000) != 0;
     }
 
     private void ReportFailure(Exception exception)
@@ -357,7 +464,8 @@ public sealed class Direct3D11SceneView : NativeControlHost
         _renderer = null;
 
         RenderFailed?.Invoke(
-            "Ошибка DX11 Viewport: " + exception.Message);
+            "Ошибка DX11 Viewport: " +
+            exception.Message);
     }
 
     private static void ReadPosition(
@@ -368,39 +476,48 @@ public sealed class Direct3D11SceneView : NativeControlHost
         long value = lParam.ToInt64();
 
         x = unchecked((short)(value & 0xFFFF));
-        y = unchecked((short)((value >> 16) & 0xFFFF));
+
+        y = unchecked((short)(
+            (value >> 16) & 0xFFFF));
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate nint SubclassProcedure(
-        nint hwnd,
-        uint message,
-        nuint wParam,
-        nint lParam,
-        nuint subclassId,
-        nuint referenceData);
-
-    [DllImport("comctl32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowSubclass(
-        nint hwnd,
-        SubclassProcedure procedure,
-        nuint subclassId,
-        nuint referenceData);
-
-    [DllImport("comctl32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool RemoveWindowSubclass(
-        nint hwnd,
-        SubclassProcedure procedure,
-        nuint subclassId);
-
-    [DllImport("comctl32.dll")]
-    private static extern nint DefSubclassProc(
+    private delegate nint WindowProcedureCallback(
         nint hwnd,
         uint message,
         nuint wParam,
         nint lParam);
+
+    [StructLayout(
+        LayoutKind.Sequential,
+        CharSet = CharSet.Unicode)]
+    private struct WindowClass
+    {
+        public uint Size;
+        public uint Style;
+        public nint Procedure;
+        public int ClassExtra;
+        public int WindowExtra;
+        public nint Instance;
+        public nint Icon;
+        public nint Cursor;
+        public nint Background;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string? MenuName;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string ClassName;
+
+        public nint SmallIcon;
+    }
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "RegisterClassExW",
+        SetLastError = true)]
+    private static extern ushort RegisterClassExW(
+        in WindowClass definition);
 
     [DllImport(
         "user32.dll",
@@ -421,15 +538,40 @@ public sealed class Direct3D11SceneView : NativeControlHost
         nint instance,
         nint parameter);
 
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "DefWindowProcW")]
+    private static extern nint DefWindowProcW(
+        nint hwnd,
+        uint message,
+        nuint wParam,
+        nint lParam);
+
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "GetModuleHandleW",
+        CharSet = CharSet.Unicode)]
+    private static extern nint GetModuleHandleW(
+        string? moduleName);
+
     [DllImport("user32.dll")]
     private static extern nint SetFocus(nint hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetFocus();
 
     [DllImport("user32.dll")]
     private static extern nint SetCapture(nint hwnd);
 
     [DllImport("user32.dll")]
+    private static extern nint GetCapture();
+
+    [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
