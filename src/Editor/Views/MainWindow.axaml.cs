@@ -19,6 +19,8 @@ public sealed partial class MainWindow : Window
 
     private Point _lastPointerPosition;
     private bool _isMouseLooking;
+    private bool _usingDirect3D = true;
+
     private double _lastFrameTime;
 
     public MainWindow()
@@ -32,9 +34,56 @@ public sealed partial class MainWindow : Window
 
         _flightTimer.Tick += FlightTimerTick;
 
+        DxViewport.RenderFailed += message =>
+        {
+            SetRenderer(false);
+            RendererSwitchButton.Content =
+                "DX11 ошибка — OpenGL";
+
+            Title = message;
+        };
+
         Opened += WindowOpened;
         Closed += WindowClosed;
         Deactivated += WindowDeactivated;
+    }
+
+    private void SwitchRendererClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        SetRenderer(!_usingDirect3D);
+    }
+
+    private void SetRenderer(bool direct3D)
+    {
+        _usingDirect3D = direct3D;
+
+        ResetInput();
+
+        SceneView.IsVisible = !direct3D;
+        SceneInputOverlay.IsVisible = !direct3D;
+
+        DxViewport.SetRenderingEnabled(direct3D);
+        DxViewport.IsVisible = direct3D;
+
+        RendererSwitchButton.Content = direct3D
+            ? "Viewport: DX11"
+            : "Viewport: OpenGL";
+    }
+
+    private void UpdateViewport()
+    {
+        if (DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        SceneView.Scene = viewModel.Scene;
+
+        DxViewport.SetScene(
+            viewModel.Scene,
+            viewModel.Vegetation);
     }
 
     private void OpenVegetationPreviewClicked(
@@ -63,7 +112,8 @@ public sealed partial class MainWindow : Window
                     Text = "Открой уровень с импортированным " +
                            "vegetation/details.zdetail.",
                     Margin = new Thickness(24),
-                    TextWrapping = Avalonia.Media.TextWrapping.Wrap
+                    TextWrapping =
+                        Avalonia.Media.TextWrapping.Wrap
                 }
             };
 
@@ -117,21 +167,33 @@ public sealed partial class MainWindow : Window
         window.Show(this);
     }
 
-    private void WindowOpened(object? sender, EventArgs e)
+    private void WindowOpened(
+        object? sender,
+        EventArgs e)
     {
         _clock.Restart();
         _lastFrameTime = 0;
         _flightTimer.Start();
+
+        UpdateViewport();
+        SetRenderer(_usingDirect3D);
     }
 
-    private void WindowClosed(object? sender, EventArgs e)
+    private void WindowClosed(
+        object? sender,
+        EventArgs e)
     {
         _flightTimer.Stop();
         _clock.Stop();
+
+        DxViewport.SetRenderingEnabled(false);
+
         ResetInput();
     }
 
-    private void WindowDeactivated(object? sender, EventArgs e)
+    private void WindowDeactivated(
+        object? sender,
+        EventArgs e)
     {
         ResetInput();
     }
@@ -142,8 +204,15 @@ public sealed partial class MainWindow : Window
         _isMouseLooking = false;
     }
 
-    private void FlightTimerTick(object? sender, EventArgs e)
+    private void FlightTimerTick(
+        object? sender,
+        EventArgs e)
     {
+        if (_usingDirect3D)
+        {
+            return;
+        }
+
         double now = _clock.Elapsed.TotalSeconds;
 
         float deltaTime = (float)Math.Clamp(
@@ -153,7 +222,8 @@ public sealed partial class MainWindow : Window
 
         _lastFrameTime = now;
 
-        if (deltaTime <= 0f || _pressedKeys.Count == 0)
+        if (deltaTime <= 0f ||
+            _pressedKeys.Count == 0)
         {
             return;
         }
@@ -213,7 +283,8 @@ public sealed partial class MainWindow : Window
         SceneInputOverlay.Focus();
 
         PointerPointProperties properties =
-            e.GetCurrentPoint(SceneInputOverlay).Properties;
+            e.GetCurrentPoint(
+                SceneInputOverlay).Properties;
 
         if (!properties.IsRightButtonPressed)
         {
@@ -221,7 +292,9 @@ public sealed partial class MainWindow : Window
         }
 
         _isMouseLooking = true;
-        _lastPointerPosition = e.GetPosition(SceneInputOverlay);
+
+        _lastPointerPosition =
+            e.GetPosition(SceneInputOverlay);
 
         e.Pointer.Capture(SceneInputOverlay);
         e.Handled = true;
@@ -243,7 +316,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        Point current = e.GetPosition(SceneInputOverlay);
+        Point current = e.GetPosition(
+            SceneInputOverlay);
+
         Vector delta = current - _lastPointerPosition;
 
         _lastPointerPosition = current;
@@ -284,7 +359,9 @@ public sealed partial class MainWindow : Window
         object? sender,
         PointerWheelEventArgs e)
     {
-        SceneView.AdjustSpeed((float)e.Delta.Y);
+        SceneView.AdjustSpeed(
+            (float)e.Delta.Y);
+
         e.Handled = true;
     }
 
@@ -348,7 +425,7 @@ public sealed partial class MainWindow : Window
         {
             ResetInput();
             viewModel.NewScene();
-            SceneView.Scene = null;
+            UpdateViewport();
         }
     }
 
@@ -369,8 +446,10 @@ public sealed partial class MainWindow : Window
         if (DataContext is MainViewModel viewModel)
         {
             ResetInput();
+
             await viewModel.ImportSelectedAsync();
-            SceneView.Scene = viewModel.Scene;
+
+            UpdateViewport();
         }
     }
 
@@ -381,8 +460,10 @@ public sealed partial class MainWindow : Window
         if (DataContext is MainViewModel viewModel)
         {
             ResetInput();
+
             await viewModel.OpenSelectedAsync();
-            SceneView.Scene = viewModel.Scene;
+
+            UpdateViewport();
         }
     }
 }

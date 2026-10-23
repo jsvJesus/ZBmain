@@ -22,6 +22,9 @@
         <ProjectReference Include="..\Core\Core.csproj" />
     </ItemGroup>
     <ItemGroup>
+      <ClCompile Include="..\..\bin\packs\shaders\Level.hlsl">
+        <Link>shaders\Level.hlsl</Link>
+      </ClCompile>
       <ClCompile Include="..\..\bin\packs\shaders\Vegetation.hlsl">
         <Link>shaders\Vegetation.hlsl</Link>
       </ClCompile>
