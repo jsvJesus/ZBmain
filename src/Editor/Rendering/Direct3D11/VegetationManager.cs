@@ -8,7 +8,7 @@ internal sealed class VegetationManager : IDisposable
 {
     private const float LoadRadius = 128f;
     private const float UnloadRadius = 176f;
-    private const int ChunksPerFrame = 2;
+    private const int ChunksPerFrame = 1;
 
     private readonly ID3D11Device _device;
     private readonly DetailLevel _details;

@@ -8,9 +8,12 @@ cbuffer ObjectData : register(b1)
 {
     row_major float4x4 Model;
     float4 MaterialSettings;
+    float4 MaterialColor;
 };
 
 Texture2D DiffuseTexture : register(t0);
+Texture2D TerrainDetailTexture : register(t1);
+
 SamplerState DiffuseSampler : register(s0);
 
 struct VertexInput
@@ -44,6 +47,58 @@ PixelInput VSMain(VertexInput input)
     return output;
 }
 
+float3 CalculateNormal(float3 worldPosition)
+{
+    float3 dx = ddx(worldPosition);
+    float3 dy = ddy(worldPosition);
+
+    float3 normal = cross(dx, dy);
+
+    float lengthSquared = dot(normal, normal);
+
+    if (lengthSquared > 0.000001f)
+    {
+        return normalize(normal);
+    }
+
+    return float3(0.0f, 1.0f, 0.0f);
+}
+
+float3 SampleTerrain(
+    float4 macroTexture,
+    float3 worldPosition)
+{
+    float luminance = dot(
+        macroTexture.rgb,
+        float3(0.333333f, 0.333333f, 0.333334f));
+
+    float macroVariation = saturate(
+        luminance / 0.32f);
+
+    float brightness = lerp(
+        0.72f,
+        1.15f,
+        macroVariation);
+
+    float3 baseColor =
+        MaterialColor.rgb * brightness;
+
+    if (MaterialSettings.w > 0.5f)
+    {
+        float2 detailUv =
+            worldPosition.xz * MaterialSettings.z;
+
+        float3 detailColor =
+            TerrainDetailTexture.Sample(
+                DiffuseSampler,
+                detailUv).rgb;
+
+        baseColor = detailColor * brightness;
+    }
+
+    return saturate(baseColor);
+}
+
 float4 PSMain(PixelInput input) : SV_TARGET
 {
     float4 albedo = DiffuseTexture.Sample(
@@ -55,24 +110,29 @@ float4 PSMain(PixelInput input) : SV_TARGET
         clip(albedo.a - MaterialSettings.x);
     }
 
-    float3 dx = ddx(input.WorldPosition);
-    float3 dy = ddy(input.WorldPosition);
+    float3 baseColor = albedo.rgb;
 
-    float3 normal = cross(dx, dy);
-    float lengthSquared = dot(normal, normal);
+    if (MaterialSettings.y > 0.5f)
+    {
+        baseColor = SampleTerrain(
+            albedo,
+            input.WorldPosition);
+    }
 
-    normal = lengthSquared > 0.000001f
-        ? normalize(normal)
-        : float3(0.0f, 1.0f, 0.0f);
+    float3 normal = CalculateNormal(
+        input.WorldPosition);
 
     float3 sunlight = normalize(
         float3(0.4f, 0.8f, 0.5f));
 
-    float diffuse = abs(dot(normal, sunlight));
+    float diffuse = abs(dot(
+        normal,
+        sunlight));
 
-    float lighting = 0.45f + diffuse * 0.55f;
+    float lighting =
+        0.45f + diffuse * 0.55f;
 
     return float4(
-        saturate(albedo.rgb * lighting),
+        saturate(baseColor * lighting),
         1.0f);
 }

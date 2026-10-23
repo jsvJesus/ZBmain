@@ -18,6 +18,7 @@ internal sealed class SceneViewportRenderer : IDisposable
 {
     private readonly Stopwatch _clock = new();
     private readonly ViewportCamera _camera = new();
+    private readonly ViewportPerformanceMonitor _performance = new();
 
     private IDXGIFactory2? _factory;
     private ID3D11Device? _device;
@@ -243,6 +244,8 @@ internal sealed class SceneViewportRenderer : IDisposable
             return;
         }
 
+        long frameStart = Stopwatch.GetTimestamp();
+
         GetSize(
             windowHandle,
             out int width,
@@ -326,7 +329,8 @@ internal sealed class SceneViewportRenderer : IDisposable
 
             _level?.Draw(
                 _context,
-                _textures);
+                _textures,
+                viewProjection);
 
             if (_vegetation is not null)
             {
@@ -340,6 +344,11 @@ internal sealed class SceneViewportRenderer : IDisposable
         _swapChain.Present(
             1,
             PresentFlags.None).CheckError();
+
+        _performance.Record(
+            Stopwatch.GetElapsedTime(frameStart),
+            _level,
+            _vegetation);
     }
 
     private void DrawVegetation(

@@ -51,6 +51,23 @@ internal sealed class VegetationTextureCache : IDisposable
         WriteReport();
     }
 
+    public bool HasTexture(string textureName)
+    {
+        if (string.IsNullOrWhiteSpace(textureName))
+        {
+            return false;
+        }
+
+        string key = textureName.Trim();
+
+        if (_unavailable.Contains(key))
+        {
+            return false;
+        }
+
+        return _loader.ResolveReference(key) is not null;
+    }
+
     public ID3D11ShaderResourceView Get(
         string textureName)
     {
