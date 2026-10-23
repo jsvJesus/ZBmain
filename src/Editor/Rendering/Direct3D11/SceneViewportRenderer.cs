@@ -19,9 +19,6 @@ internal sealed class SceneViewportRenderer : IDisposable
     private readonly Stopwatch _clock = new();
     private readonly ViewportCamera _camera = new();
 
-    private readonly List<VegetationGpuMesh> _vegetation =
-        new();
-
     private IDXGIFactory2? _factory;
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
@@ -44,6 +41,7 @@ internal sealed class SceneViewportRenderer : IDisposable
 
     private LevelGpuScene? _level;
     private VegetationTextureCache? _textures;
+    private VegetationManager? _vegetation;
 
     private int _width;
     private int _height;
@@ -182,23 +180,28 @@ internal sealed class SceneViewportRenderer : IDisposable
 
             if (details is not null)
             {
-                VegetationBuildResult build =
-                    VegetationInstanceBuilder.Build(details);
+                TerrainHeightSampler? terrain = null;
 
-                foreach (VegetationBatch batch in build.Batches)
+                try
                 {
-                    DetailModel model = details.Models[
-                        batch.ModelIndex
-                    ];
-
-                    _vegetation.Add(
-                        new VegetationGpuMesh(
-                            _device,
-                            model,
-                            batch.Instances));
-
-                    _textures.Get(model.Texture);
+                    terrain = TerrainHeightSampler.Load(
+                        scene.Name,
+                        details);
                 }
+                catch (Exception exception) when (
+                    exception is IOException or
+                        InvalidDataException or
+                        UnauthorizedAccessException)
+                {
+                    Trace.WriteLine(
+                        "Не удалось загрузить collision.zmesh: " +
+                        exception.Message);
+                }
+
+                _vegetation = new VegetationManager(
+                    _device,
+                    details,
+                    terrain);
             }
 
             _camera.Reset(scene, null);
@@ -291,13 +294,14 @@ internal sealed class SceneViewportRenderer : IDisposable
         if (_frameBuffer is not null &&
             _textures is not null)
         {
+            Matrix4x4 viewProjection =
+                _camera.CreateViewProjection(
+                    _width,
+                    _height);
+
             var frame = new FrameConstants
             {
-                ViewProjection =
-                    _camera.CreateViewProjection(
-                        _width,
-                        _height),
-
+                ViewProjection = viewProjection,
                 Frame = new Vector4(
                     (float)_clock.Elapsed.TotalSeconds,
                     0f,
@@ -324,7 +328,13 @@ internal sealed class SceneViewportRenderer : IDisposable
                 _context,
                 _textures);
 
-            DrawVegetation();
+            if (_vegetation is not null)
+            {
+                _vegetation.Update(
+                    _camera.Position);
+
+                DrawVegetation(viewProjection);
+            }
         }
 
         _swapChain.Present(
@@ -332,14 +342,15 @@ internal sealed class SceneViewportRenderer : IDisposable
             PresentFlags.None).CheckError();
     }
 
-    private void DrawVegetation()
+    private void DrawVegetation(
+        Matrix4x4 viewProjection)
     {
         if (_context is null ||
             _textures is null ||
+            _vegetation is null ||
             _vegetationLayout is null ||
             _vegetationVS is null ||
-            _vegetationPS is null ||
-            _vegetation.Count == 0)
+            _vegetationPS is null)
         {
             return;
         }
@@ -356,14 +367,10 @@ internal sealed class SceneViewportRenderer : IDisposable
         _context.PSSetShader(
             _vegetationPS);
 
-        foreach (VegetationGpuMesh mesh in _vegetation)
-        {
-            _context.PSSetShaderResource(
-                0,
-                _textures.Get(mesh.TextureName));
-
-            mesh.Draw(_context);
-        }
+        _vegetation.Draw(
+            _context,
+            _textures,
+            viewProjection);
     }
 
     private void CreateVegetationShaders()
@@ -496,12 +503,8 @@ internal sealed class SceneViewportRenderer : IDisposable
 
     private void ReleaseScene()
     {
-        foreach (VegetationGpuMesh mesh in _vegetation)
-        {
-            mesh.Dispose();
-        }
-
-        _vegetation.Clear();
+        _vegetation?.Dispose();
+        _vegetation = null;
 
         _level?.Dispose();
         _level = null;

@@ -10,6 +10,7 @@ internal sealed class ViewportCamera
 
     private Vector3 _position;
     private Vector3 _target;
+    public Vector3 Position => _position;
 
     private float _yaw;
     private float _pitch;
