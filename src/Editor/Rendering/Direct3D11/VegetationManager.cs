@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using Core.Levels;
 using Vortice.Direct3D11;
@@ -8,7 +9,6 @@ internal sealed class VegetationManager : IDisposable
 {
     private const float LoadRadius = 128f;
     private const float UnloadRadius = 176f;
-    private const int ChunksPerFrame = 1;
 
     private readonly ID3D11Device _device;
     private readonly DetailLevel _details;
@@ -21,6 +21,19 @@ internal sealed class VegetationManager : IDisposable
     private readonly Dictionary<
         (int X, int Z),
         ResidentChunk> _loaded = new();
+
+    private readonly HashSet<(int X, int Z)> _rejected =
+        new();
+
+    private readonly List<(int X, int Z)> _unloadKeys =
+        new();
+
+    private readonly VegetationGpuModel?[] _models;
+
+    private Task<VegetationChunk>? _building;
+    private (int X, int Z) _buildingKey;
+
+    private bool _disposed;
 
     public int LoadedChunks => _loaded.Count;
 
@@ -36,42 +49,184 @@ internal sealed class VegetationManager : IDisposable
         _details = details;
         _terrain = terrain;
 
-        IndexCells();
+        _models = new VegetationGpuModel?[details.Models.Length];
+
+        try
+        {
+            for (int i = 0; i < details.Models.Length; i++)
+            {
+                DetailModel model = details.Models[i];
+
+                if (model.Vertices.Length == 0 ||
+                    model.Indices.Length < 3)
+                {
+                    continue;
+                }
+
+                _models[i] = new VegetationGpuModel(
+                    device,
+                    model);
+            }
+
+            IndexCells();
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     public void Update(Vector3 cameraPosition)
     {
-        float x = cameraPosition.X;
-        float z = cameraPosition.Z;
-
-        foreach (var pair in _loaded.ToArray())
+        if (_disposed)
         {
-            float distance = DistanceToTile(
-                x,
-                z,
-                pair.Key.X,
-                pair.Key.Z);
+            return;
+        }
 
-            if (distance <= UnloadRadius)
+        UnloadDistant(cameraPosition);
+        CompletePendingBuild(cameraPosition);
+
+        if (_building is not null)
+        {
+            return;
+        }
+
+        (int X, int Z)? candidate =
+            FindNearestMissing(cameraPosition);
+
+        if (!candidate.HasValue)
+        {
+            return;
+        }
+
+        (int X, int Z) key = candidate.Value;
+
+        IReadOnlyList<DetailCell> cells = _cells[key];
+
+        _buildingKey = key;
+
+        _building = Task.Run(() =>
+            VegetationChunk.Build(
+                key.X,
+                key.Z,
+                cells,
+                _details,
+                _terrain));
+    }
+
+    public void Draw(
+        ID3D11DeviceContext context,
+        VegetationTextureCache textures,
+        Matrix4x4 viewProjection)
+    {
+        var frustum = new ViewportFrustum(
+            viewProjection);
+
+        foreach (ResidentChunk resident in _loaded.Values)
+        {
+            if (!frustum.IntersectsSphere(
+                    resident.Data.Center,
+                    resident.Data.Radius))
             {
                 continue;
             }
 
-            pair.Value.Dispose();
-            _loaded.Remove(pair.Key);
+            foreach (VegetationGpuBatch batch
+                     in resident.Batches)
+            {
+                context.PSSetShaderResource(
+                    0,
+                    textures.Get(batch.TextureName));
+
+                batch.Draw(context);
+            }
+        }
+    }
+
+    private void CompletePendingBuild(
+        Vector3 cameraPosition)
+    {
+        Task<VegetationChunk>? task = _building;
+
+        if (task is null || !task.IsCompleted)
+        {
+            return;
         }
 
-        int centerX = GetTile(x);
-        int centerZ = GetTile(z);
+        (int X, int Z) key = _buildingKey;
 
-        int tileRadius =
-            (int)MathF.Ceiling(
-                LoadRadius / VegetationChunk.TileSize) + 1;
+        _building = null;
 
-        var candidates = new List<(
-            int X,
-            int Z,
-            float Distance)>();
+        if (task.IsFaulted || task.IsCanceled)
+        {
+            _rejected.Add(key);
+
+            Trace.WriteLine(
+                $"Vegetation chunk {key}: " +
+                task.Exception?.GetBaseException().Message);
+
+            return;
+        }
+
+        VegetationChunk chunk = task.Result;
+
+        if (DistanceToTile(
+                cameraPosition.X,
+                cameraPosition.Z,
+                key.X,
+                key.Z) > LoadRadius)
+        {
+            return;
+        }
+
+        if (_loaded.ContainsKey(key))
+        {
+            return;
+        }
+
+        var resident = new ResidentChunk(chunk);
+
+        try
+        {
+            foreach (VegetationBatch batch in chunk.Batches)
+            {
+                VegetationGpuModel? model =
+                    _models[batch.ModelIndex];
+
+                if (model is null ||
+                    batch.Instances.Length == 0)
+                {
+                    continue;
+                }
+
+                resident.Batches.Add(
+                    new VegetationGpuBatch(
+                        _device,
+                        model,
+                        batch.Instances));
+            }
+
+            _loaded.Add(key, resident);
+        }
+        catch
+        {
+            resident.Dispose();
+            throw;
+        }
+    }
+
+    private (int X, int Z)? FindNearestMissing(
+        Vector3 cameraPosition)
+    {
+        int centerX = GetTile(cameraPosition.X);
+        int centerZ = GetTile(cameraPosition.Z);
+
+        int tileRadius = (int)MathF.Ceiling(
+            LoadRadius / VegetationChunk.TileSize) + 1;
+
+        (int X, int Z)? nearest = null;
+        float nearestDistance = float.PositiveInfinity;
 
         for (int dz = -tileRadius;
              dz <= tileRadius;
@@ -87,104 +242,57 @@ internal sealed class VegetationManager : IDisposable
                 var key = (tileX, tileZ);
 
                 if (_loaded.ContainsKey(key) ||
+                    _rejected.Contains(key) ||
                     !_cells.ContainsKey(key))
                 {
                     continue;
                 }
 
                 float distance = DistanceToTile(
-                    x,
-                    z,
+                    cameraPosition.X,
+                    cameraPosition.Z,
                     tileX,
                     tileZ);
 
-                if (distance > LoadRadius)
+                if (distance > LoadRadius ||
+                    distance >= nearestDistance)
                 {
                     continue;
                 }
 
-                candidates.Add((
-                    tileX,
-                    tileZ,
-                    distance));
+                nearest = key;
+                nearestDistance = distance;
             }
         }
 
-        candidates.Sort(
-            (a, b) => a.Distance.CompareTo(b.Distance));
-
-        int created = 0;
-
-        foreach (var candidate in candidates)
-        {
-            if (created >= ChunksPerFrame)
-            {
-                break;
-            }
-
-            var key = (
-                candidate.X,
-                candidate.Z);
-
-            VegetationChunk chunk =
-                VegetationChunk.Build(
-                    key.Item1,
-                    key.Item2,
-                    _cells[key],
-                    _details,
-                    _terrain);
-
-            var resident = new ResidentChunk(chunk);
-
-            try
-            {
-                foreach (VegetationBatch batch in chunk.Batches)
-                {
-                    DetailModel model =
-                        _details.Models[batch.ModelIndex];
-
-                    resident.Meshes.Add(
-                        new VegetationGpuMesh(
-                            _device,
-                            model,
-                            batch.Instances));
-                }
-
-                _loaded.Add(key, resident);
-                created++;
-            }
-            catch
-            {
-                resident.Dispose();
-                throw;
-            }
-        }
+        return nearest;
     }
 
-    public void Draw(
-        ID3D11DeviceContext context,
-        VegetationTextureCache textures,
-        Matrix4x4 viewProjection)
+    private void UnloadDistant(Vector3 cameraPosition)
     {
-        foreach (ResidentChunk resident in _loaded.Values)
+        _unloadKeys.Clear();
+
+        foreach (var pair in _loaded)
         {
-            if (!IsVisible(
-                    viewProjection,
-                    resident.Data.Center,
-                    resident.Data.Radius))
-            {
-                continue;
-            }
+            float distance = DistanceToTile(
+                cameraPosition.X,
+                cameraPosition.Z,
+                pair.Key.X,
+                pair.Key.Z);
 
-            foreach (VegetationGpuMesh mesh in resident.Meshes)
+            if (distance > UnloadRadius)
             {
-                context.PSSetShaderResource(
-                    0,
-                    textures.Get(mesh.TextureName));
-
-                mesh.Draw(context);
+                _unloadKeys.Add(pair.Key);
             }
         }
+
+        foreach ((int X, int Z) key in _unloadKeys)
+        {
+            _loaded[key].Dispose();
+            _loaded.Remove(key);
+        }
+
+        _unloadKeys.Clear();
     }
 
     private void IndexCells()
@@ -192,12 +300,8 @@ internal sealed class VegetationManager : IDisposable
         foreach (DetailCell cell in _details.Cells)
         {
             if (!float.IsFinite(cell.Position.X) ||
-                !float.IsFinite(cell.Position.Y))
-            {
-                continue;
-            }
-
-            if (!HasVegetation(cell))
+                !float.IsFinite(cell.Position.Y) ||
+                !HasVegetation(cell))
             {
                 continue;
             }
@@ -245,17 +349,11 @@ internal sealed class VegetationManager : IDisposable
         int tileX,
         int tileZ)
     {
-        float minimumX =
-            tileX * VegetationChunk.TileSize;
+        float minimumX = tileX * VegetationChunk.TileSize;
+        float minimumZ = tileZ * VegetationChunk.TileSize;
 
-        float minimumZ =
-            tileZ * VegetationChunk.TileSize;
-
-        float maximumX =
-            minimumX + VegetationChunk.TileSize;
-
-        float maximumZ =
-            minimumZ + VegetationChunk.TileSize;
+        float maximumX = minimumX + VegetationChunk.TileSize;
+        float maximumZ = minimumZ + VegetationChunk.TileSize;
 
         float nearestX = Math.Clamp(
             worldX,
@@ -273,93 +371,37 @@ internal sealed class VegetationManager : IDisposable
         return MathF.Sqrt(dx * dx + dz * dz);
     }
 
-    private static bool IsVisible(
-        Matrix4x4 matrix,
-        Vector3 center,
-        float radius)
-    {
-        Vector4[] planes =
-        [
-            new(
-                matrix.M14 + matrix.M11,
-                matrix.M24 + matrix.M21,
-                matrix.M34 + matrix.M31,
-                matrix.M44 + matrix.M41),
-
-            new(
-                matrix.M14 - matrix.M11,
-                matrix.M24 - matrix.M21,
-                matrix.M34 - matrix.M31,
-                matrix.M44 - matrix.M41),
-
-            new(
-                matrix.M14 + matrix.M12,
-                matrix.M24 + matrix.M22,
-                matrix.M34 + matrix.M32,
-                matrix.M44 + matrix.M42),
-
-            new(
-                matrix.M14 - matrix.M12,
-                matrix.M24 - matrix.M22,
-                matrix.M34 - matrix.M32,
-                matrix.M44 - matrix.M42),
-
-            new(
-                matrix.M13,
-                matrix.M23,
-                matrix.M33,
-                matrix.M43),
-
-            new(
-                matrix.M14 - matrix.M13,
-                matrix.M24 - matrix.M23,
-                matrix.M34 - matrix.M33,
-                matrix.M44 - matrix.M43)
-        ];
-
-        foreach (Vector4 plane in planes)
-        {
-            float length = MathF.Sqrt(
-                plane.X * plane.X +
-                plane.Y * plane.Y +
-                plane.Z * plane.Z);
-
-            if (length <= 0.000001f)
-            {
-                continue;
-            }
-
-            float distance = (
-                plane.X * center.X +
-                plane.Y * center.Y +
-                plane.Z * center.Z +
-                plane.W) / length;
-
-            if (distance < -radius)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     public void Dispose()
     {
-        foreach (ResidentChunk resident in _loaded.Values)
+        if (_disposed)
         {
-            resident.Dispose();
+            return;
+        }
+
+        _disposed = true;
+
+        foreach (ResidentChunk chunk in _loaded.Values)
+        {
+            chunk.Dispose();
         }
 
         _loaded.Clear();
+
+        foreach (VegetationGpuModel? model in _models)
+        {
+            model?.Dispose();
+        }
+
         _cells.Clear();
+        _rejected.Clear();
+        _unloadKeys.Clear();
     }
 
     private sealed class ResidentChunk : IDisposable
     {
         public VegetationChunk Data { get; }
 
-        public List<VegetationGpuMesh> Meshes { get; } =
+        public List<VegetationGpuBatch> Batches { get; } =
             new();
 
         public ResidentChunk(VegetationChunk data)
@@ -369,12 +411,12 @@ internal sealed class VegetationManager : IDisposable
 
         public void Dispose()
         {
-            foreach (VegetationGpuMesh mesh in Meshes)
+            foreach (VegetationGpuBatch batch in Batches)
             {
-                mesh.Dispose();
+                batch.Dispose();
             }
 
-            Meshes.Clear();
+            Batches.Clear();
         }
     }
 }

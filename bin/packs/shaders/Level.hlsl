@@ -70,18 +70,17 @@ float3 SampleTerrain(
 {
     float luminance = dot(
         macroTexture.rgb,
-        float3(0.333333f, 0.333333f, 0.333334f));
+        float3(0.299f, 0.587f, 0.114f));
 
     float macroVariation = saturate(
-        luminance / 0.32f);
+        luminance / 0.40f);
 
     float brightness = lerp(
-        0.72f,
-        1.15f,
+        0.82f,
+        1.12f,
         macroVariation);
 
-    float3 baseColor =
-        MaterialColor.rgb * brightness;
+    float3 baseColor = MaterialColor.rgb;
 
     if (MaterialSettings.w > 0.5f)
     {
@@ -93,10 +92,14 @@ float3 SampleTerrain(
                 DiffuseSampler,
                 detailUv).rgb;
 
-        baseColor = detailColor * brightness;
+        baseColor = lerp(
+            MaterialColor.rgb,
+            detailColor,
+            0.72f);
     }
 
-    return saturate(baseColor);
+    return saturate(
+        baseColor * brightness);
 }
 
 float4 PSMain(PixelInput input) : SV_TARGET

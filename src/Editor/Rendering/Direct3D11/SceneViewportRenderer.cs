@@ -125,7 +125,7 @@ internal sealed class SceneViewportRenderer : IDisposable
                 RasterizerDescription.CullNone);
 
             _sampler = _device.CreateSamplerState(
-                SamplerDescription.LinearWrap);
+                SamplerDescription.AnisotropicWrap);
 
             _depthState = _device.CreateDepthStencilState(
                 new DepthStencilDescription(
@@ -173,7 +173,8 @@ internal sealed class SceneViewportRenderer : IDisposable
             _textures = new VegetationTextureCache(
                 _device,
                 _context,
-                scene.Name);
+                scene.Name,
+                backgroundLoading: true);
 
             _level = new LevelGpuScene(
                 _device,
@@ -301,6 +302,9 @@ internal sealed class SceneViewportRenderer : IDisposable
                 _camera.CreateViewProjection(
                     _width,
                     _height);
+
+            _textures.ProcessPendingUploads(
+                maximumUploads: 1);
 
             var frame = new FrameConstants
             {
